@@ -2,6 +2,7 @@
 #ifndef __OUTPUTSTREAM_H__
 #define __OUTPUTSTREAM_H__
 
+#include <config.h>
 #include <stdio.h>
 #include "mjpeg_types.h"
 #include "interact.hpp"
@@ -13,8 +14,7 @@
 class Multiplexor
 {
 public:
-	Multiplexor(MultiplexJob &job, OutputStream &output, OutputStream *index);
-        ~Multiplexor ();
+	Multiplexor(MultiplexJob &job);
 	void Multiplex ();
 
 
@@ -32,7 +32,6 @@ public:
 							  uint8_t 	 timestamps
 		);
 
-    void IndexLastPacket( ElementaryStream &strm, int index_type );
 	bool AfterMaxPTS(clockticks &timestamp) 
 		{ return max_PTS != 0 && timestamp >= max_PTS; }
 
@@ -46,6 +45,7 @@ public:
 	   by the input stream objects.
 	 */
 	
+	char *output_filename_pattern;
 	bool always_sys_header_in_pack;
 	bool dtspts_for_all_vau;
 	bool sys_header_in_pack1;
@@ -65,9 +65,8 @@ public:
 
 	int mpeg;
 	int data_rate;
-    unsigned int    run_in_frames;
-    int mux_format;
-	uint64_t max_segment_size;
+	int mux_format;
+	off_t max_segment_size;
 
 	Workarounds workarounds;
 
@@ -82,7 +81,7 @@ public:
 	unsigned int    transport_prefix_sectors; 
 	unsigned int 	sector_size;
 	unsigned int	vcd_zero_stuffing;	/* VCD audio sectors have 20 0 bytes :-( */
-    
+
 	int 		dmux_rate;	/* Actual data mux-rate for calculations always a multiple of 50  */
 	int 		mux_rate;	/* MPEG mux rate (50 byte/sec units      */
 
@@ -110,7 +109,7 @@ private:
 	PS_Stream *psstrm;
 	bitcount_t bytes_output;
     clockticks ticks_per_sector;
-    OutputStream *vdr_index;
+
 public:
 	clockticks current_SCR;
 private:
@@ -134,7 +133,7 @@ private:
 	void InitInputStreams(MultiplexJob &job);
 	void InitInputStreamsForStills(MultiplexJob & job );
 	void InitInputStreamsForVideo(MultiplexJob & job );
-	clockticks RunInDelay();
+	unsigned int RunInSectors();
 	void Init();
 	
 

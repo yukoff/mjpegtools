@@ -1,63 +1,75 @@
-
-/*
- *  systems.cpp: Program/System stream packet generator 
- *
- *
- *  Copyright (C) 2001 Andrew Stevens <andrew.stevens@philips.com>
- *
- *
- *  This program is free software; you can redistribute it and/or
- *  modify it under the terms of version 2 of the GNU General Public License
- *  as published by the Free Software Foundation.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- */
-
-
 #include <config.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <memory>
 
+#ifdef _WIN32
+#include <win32defs.h>
+#else
 #include <sys/param.h>
+#endif
+#include <sys/stat.h>
 #include "systems.hpp"
 #include "mplexconsts.hpp"
 
+using std::auto_ptr;
+
 PS_Stream:: PS_Stream( unsigned _mpeg,
                        unsigned int _sector_size,
-                       OutputStream &_output_strm, 
-                       uint64_t max_seg_size )
-    : output_strm(_output_strm ),
-      mpeg_version( _mpeg),
+                       const char *name_pat, 
+                       off_t max_seg_size )
+    : mpeg_version( _mpeg),
       sector_size( _sector_size ),
+      segment_num( 1 ),
       max_segment_size( max_seg_size )
 {
     sector_buf = new uint8_t[sector_size];
 	max_segment_size = max_seg_size;
+	strncpy( filename_pat, name_pat, MAXPATHLEN );
+	snprintf( cur_filename, MAXPATHLEN, filename_pat, segment_num );
 }
 
-PS_Stream::~PS_Stream()
+int PS_Stream::Open()
 {
-    delete [] sector_buf;
-}
+	strm = fopen( cur_filename, "wb" );
+	if( strm == NULL )
+	{
+		mjpeg_error_exit1( "Could not open for writing: %s", cur_filename );
+	}
 
+	return 0;
+}
 
 bool
-PS_Stream::SegmentLimReached()
+PS_Stream::FileLimReached()
 {
-	uint64_t written = output_strm.SegmentSize();
+	struct stat stb;
+    fstat(fileno(strm), &stb);
+	off_t written = stb.st_size;
 	return max_segment_size != 0 && written > max_segment_size;
 }
 
-
-
+void 
+PS_Stream::NextFile( )
+{
+    auto_ptr<char> prev_filename_buf( new char[strlen(cur_filename)+1] );
+    char *prev_filename = prev_filename_buf.get();
+	fclose(strm);
+	++segment_num;
+    strcpy( prev_filename, cur_filename );
+	snprintf( cur_filename, MAXPATHLEN, filename_pat, segment_num );
+	if( strcmp( prev_filename, cur_filename ) == 0 )
+	{
+		mjpeg_error_exit1( 
+			"Need to split output but there appears to be no %%d in the filename pattern %s", filename_pat );
+	}
+	strm = fopen( cur_filename, "wb" );
+	if( strm == NULL )
+	{
+		mjpeg_error_exit1( "Could not open for writing: %s", cur_filename );
+	}
+}
 
 /**************************************************************
 
@@ -258,25 +270,6 @@ PS_Stream::BufferSectorHeader( uint8_t *index,
     header_end = index;
 }
 
-/************************
- *
- * Is this a stream where for the MPEG-2
- * header extensionsappear?
- *
- * The version below is correct at least forDVD
- * authoring.   The function is virtual in case sometime
- * someplace a different format where PRIVATE_STR_2 is used
- * differently is encountered.
- *
- ************************/
-
-
-bool PS_Stream::StreamWithMPeg2HeaderExt( uint8_t type )
-{
-   return type != PADDING_STR
-       && type != PRIVATE_STR_2;
-}
-
 /******************************************
  *
  * BufferPacketHeader
@@ -347,7 +340,7 @@ void PS_Stream::BufferPacketHeader( uint8_t *buf,
 			break;
 		}
 	}
-	else if( StreamWithMPeg2HeaderExt( type )  )
+	else if( type != PADDING_STR )
 	{
 	  	/* MPEG-2 packet syntax header flags. */
         /* These *DO NOT* appear in padding packets 			*/
@@ -391,11 +384,11 @@ void PS_Stream::BufferPacketHeader( uint8_t *buf,
 			*(index++) = static_cast<uint8_t> (buffer_size & 0xff);
 		}
         /* If required pad the PES header: needed for some workarounds */
-        while( index-(pes_header_len_field+1) < static_cast<int>(min_pes_hdr_len) )
+        while( index-(pes_header_len_field+1) < min_pes_hdr_len )
             *(index++)=static_cast<uint8_t>(STUFFING_BYTE);
 	}
 
-    if( mpeg_version != 1 && StreamWithMPeg2HeaderExt( type )  )
+    if( mpeg_version == 2 && type != PADDING_STR )
     {
         *pes_header_len_field = 
             static_cast<uint8_t>(index-(pes_header_len_field+1));	
@@ -444,6 +437,8 @@ PS_Stream::CreateSector (Pack_struc	 	 *pack,
     int i;
     uint8_t *index;
     uint8_t *size_offset;
+	uint8_t *fixed_packet_header_end;
+	uint8_t *_pes_header_len_offset = 0;
 	unsigned int target_packet_data_size;
 	unsigned int actual_packet_data_size;
 	int packet_data_to_read;
@@ -459,9 +454,7 @@ PS_Stream::CreateSector (Pack_struc	 	 *pack,
 		sector_pack_area -= 4;
 
     BufferSectorHeader( index, pack, sys_header, index );
-    last_pack_start = output_strm.SegmentSize()
-                      + static_cast<bitcount_t>(index-sector_buf);
-    
+
     BufferPacketHeader( index, type, mpeg_version,
                         buffers, buffer_size, buffer_scale,
                         PTS, DTS, timestamps,
@@ -513,14 +506,31 @@ PS_Stream::CreateSector (Pack_struc	 	 *pack,
 
     actual_packet_data_size = mux_strm.ReadPacketPayload(index,packet_data_to_read);
 
-    bytes_short = target_packet_data_size - actual_packet_data_size;
 #ifdef MUX_DEBUG
     if( type == PRIVATE_STR_1 )
     {
-        mjpeg_info( "Substream %02x short %d", index[0], bytes_short );
-
+        unsigned int syncwords_found;
+        for( i = 0; i < actual_packet_data_size; ++i )
+        {
+            if( index[i+4] == 0x0b && 
+                i+5 < actual_packet_data_size && index[i+5] == 0x77 )
+            {
+                if( syncwords_found == 0 )
+                {
+                    if(  ac3_header[2] != static_cast<uint8_t>((i+1) >>8) ||
+                         ac3_header[3] != static_cast<uint8_t>((i+1) & 0xff) )
+                        printf( "BROKEN HEADER %2x %2x (%2x %2x)\n",
+                                ac3_header[2],
+                                ac3_header[3],
+                                static_cast<uint8_t>((i+1) >>8),
+                                static_cast<uint8_t>((i+1) & 0xff) );
+                }
+                ++syncwords_found;
+            }
+        }
     }
 #endif
+    bytes_short = target_packet_data_size - actual_packet_data_size;
 	
     /* Handle the situations where we don't have enough data to fill
        the packet size fully ...  small shortfalls are dealt with here
@@ -533,7 +543,6 @@ PS_Stream::CreateSector (Pack_struc	 	 *pack,
         if (mpeg_version == 1 )
         {
             /* MPEG-1 stuffing happens *before* header data fields. */
-            uint8_t *fixed_packet_header_end = size_offset + 2;
             memmove( fixed_packet_header_end+bytes_short, 
                      fixed_packet_header_end, 
                      actual_packet_data_size+(index-fixed_packet_header_end)
@@ -551,7 +560,7 @@ PS_Stream::CreateSector (Pack_struc	 	 *pack,
             {
                 uint8_t *pes_header_len_offset = size_offset + 4;
                 unsigned int pes_header_len = 
-                    index+bytes_short-(pes_header_len_offset+1);
+                    index-(pes_header_len_offset+1);
                 *pes_header_len_offset = static_cast<uint8_t>(pes_header_len);	            }
         }
         index += bytes_short;
@@ -750,6 +759,14 @@ PS_Stream::CreateSysHeader (	Sys_header_struc *sys_header,
 }
 
 
+void
+PS_Stream::RawWrite( uint8_t *buf, unsigned int len )
+{
+    if( fwrite( buf, 1, len, strm ) != len )
+    {
+        mjpeg_error_exit1( "Failed write: %s", cur_filename );
+    }
+}
 
 
 /* 

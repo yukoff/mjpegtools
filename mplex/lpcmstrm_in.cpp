@@ -37,23 +37,17 @@
 #include "multiplexor.hpp"
 
 
-const unsigned int LPCMStream::default_buffer_size = 58*1024;
-const unsigned int LPCMStream::ticks_per_frame_90kHz = 150;
 
 
 LPCMStream::LPCMStream(IBitStream &ibs, LpcmParams *parms, Multiplexor &into) : 
 	AudioStream( ibs, into ),
     parms(parms)
 {
-	num_frames = 0;
 }
-
-
-
 
 bool LPCMStream::Probe(IBitStream &bs )
 {
-    const char *last_dot = strrchr( bs.StreamName(), '.' );
+    char *last_dot = strrchr( bs.StreamName(), '.' );
     return 
         last_dot != NULL 
         && strcmp( last_dot+1, "lpcm") == 0;
@@ -72,24 +66,24 @@ void LPCMStream::Init ( const int _stream_num)
 
 {
     stream_num = _stream_num;
-    header_skip = 0;
 	MuxStream::Init( PRIVATE_STR_1, 
 					 1,  // Buffer scale
 					 default_buffer_size,
-					 false,
+					 muxinto.vcd_zero_stuffing,
 					 muxinto.buffers_in_audio,
 					 muxinto.always_buffers_in_audio
 		);
-
-    // This seems to be necessary not only for some software players but
-    // for some standalone players too.   Yuck... shades of the VCD audio
-    // sectors.
-    min_pes_header_len = 10;
+    
+    if( muxinto.workarounds.mplayer_pes_headers )
+    {
+        min_pes_header_len = 10;
+    }
     mjpeg_info ("Scanning for header info: LPCM Audio stream %02x (%s)",
                 stream_num,
                 bs.StreamName()
                 );
 
+	InitAUbuffer();
     
 	AU_start = bs.bitcount();
 
@@ -103,7 +97,6 @@ void LPCMStream::Init ( const int _stream_num)
         samples_per_second * channels * bits_per_sample / 8
         * ticks_per_frame_90kHz
         / 90000;
-    whole_unit = (channels * bits_per_sample) / 4;
     frame_index = 0;
     dynamic_range_code = 0x80;
 
@@ -115,7 +108,7 @@ void LPCMStream::Init ( const int _stream_num)
     access_unit.DTS = access_unit.PTS;
     access_unit.dorder = decoding_order;
     decoding_order++;
-    aunits.Append( access_unit );
+    aunits.append( access_unit );
     
 	OutputHdrInfo();
 }
@@ -133,11 +126,14 @@ void LPCMStream::FillAUbuffer(unsigned int frames_to_buffer )
 	mjpeg_debug( "Scanning %d MPEG LPCM audio frames to frame %d", 
 				 frames_to_buffer, last_buffered_AU );
 
+    static int header_skip = 0;        // Initially skipped past  5 bytes of header 
+    int skip;
+
 	while ( !bs.eos() 
             && decoding_order < last_buffered_AU 
             && !muxinto.AfterMaxPTS(access_unit.PTS) )
 	{
-		int skip=access_unit.length; 
+		skip=access_unit.length-header_skip; 
         bs.SeekFwdBits( skip );
 		prev_offset = AU_start;
 		AU_start = bs.bitcount();
@@ -145,7 +141,7 @@ void LPCMStream::FillAUbuffer(unsigned int frames_to_buffer )
         {
             mjpeg_warn("Discarding incomplete final frame LPCM  stream %d",
                        stream_num);
-            aunits.DropLast();
+            aunits.droplast();
             --decoding_order;
             break;
         }
@@ -161,8 +157,8 @@ void LPCMStream::FillAUbuffer(unsigned int frames_to_buffer )
 		access_unit.DTS = access_unit.PTS;
 		access_unit.dorder = decoding_order;
 		decoding_order++;
-		aunits.Append( access_unit );
-		num_frames++;
+		aunits.append( access_unit );
+		num_frames[0]++;
 		
 		num_syncword++;
 
@@ -185,7 +181,7 @@ void LPCMStream::Close()
     stream_length = AU_start / 8;
 	mjpeg_info ("AUDIO_STATISTICS: %02x", stream_id); 
     mjpeg_info ("Audio stream length %lld bytes.", stream_length);
-    mjpeg_info   ("Frames         : %8u ",  num_frames);
+    mjpeg_info   ("Frames         : %8u ",  num_frames[0]);
 }
 
 /*************************************************************************
@@ -213,8 +209,8 @@ LPCMStream::ReadPacketPayload(uint8_t *dst, unsigned int to_read)
 {
     unsigned int header_size = LPCMStream::StreamHeaderSize();
     bitcount_t read_start = bs.GetBytePos();
-    unsigned int bytes_read = bs.GetBytes( dst + header_size, 
-      (( to_read - header_size ) / whole_unit ) * whole_unit );
+    unsigned int bytes_read = bs.GetBytes( dst+header_size, 
+                                           to_read-header_size );
     bs.Flush( read_start );
     
 	clockticks   decode_time;
@@ -295,8 +291,8 @@ completion:
     // the smallest value is 1!
     dst[0] = LPCM_SUB_STR_0 + stream_num;
     dst[1] = frames;
-    dst[2] = (starting_frame_offset+4)>>8;
-    dst[3] = (starting_frame_offset+4)&0xff;
+    dst[2] = (starting_frame_offset+1)>>8;
+    dst[3] = (starting_frame_offset+1)&0xff;
     unsigned int bps_code;
     switch( bits_per_sample )
     {

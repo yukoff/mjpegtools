@@ -1,10 +1,8 @@
 TODO
 
--Fix the bug with excessibe run-in in AC3 with small packets (no buffering time limit) validate using stereo-96-1min-1st-five.tar.gz
-
-
-- Replace the stream-specific ReadPacketPayload stuff with
-  proper AUMuxed StreamHeaderSize based stuff
+	- Consider adding a flag to ensure LCPM header_data > 9 bytes
+	to work around seek bug in mplayer (if it is not fixed). It would
+	suffice to always mux buffers...
 
 - Replace the current peak rate estimation with one based on
 monitoring SCR and position in original stream every so-and-so many
@@ -20,6 +18,9 @@ muxed out frames...
 
 - Need to add general facility for enforcing max STD buffer delay for audio
   and for warning if constraints for particular formats are exceeded.
+
+- Complete tidying up the systems.cc structure.   Non-duplication of the
+	header generation stuff would be neat if it can be managed...
 
 - Add checking for changed sequence parameters in mid-sequence
 	sequence headers.

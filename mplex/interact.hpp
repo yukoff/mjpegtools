@@ -22,6 +22,7 @@
 #ifndef __INTERACT_HH__
 #define __INTERACT_HH__
 
+#include <config.h>
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -44,6 +45,7 @@ using std::vector;
 struct Workarounds
 {
   Workarounds();
+  bool mplayer_pes_headers;
 };
 
 class MultiplexParams
@@ -51,13 +53,10 @@ class MultiplexParams
 public:
   unsigned int data_rate;
   unsigned int packets_per_pack;
-  int video_offset;             // A/V sync offset. Always one 0 and the
-                                // other positive. Specified in 
-  int audio_offset;             // MPEG-2 CLOCKS: 1/(90000*300)-th sec
-
+  int video_offset;
+  int audio_offset;
   unsigned int sector_size;
-  bool VBR;                     // Force VBR even if profile suggests CBR
-  bool CBR;                     // Force CBR even if profile suggests VBR
+  bool VBR;
   int mpeg;
   int mux_format;
   bool multifile_segment;
@@ -66,11 +65,9 @@ public:
   bool stills;
   int verbose;
   int max_timeouts;
-  const char *outfile_pattern;
-  const char *vdr_index_pathname;
+  char *outfile_pattern;
   int max_segment_size;
   int min_pes_header_len;
-  int run_in_frames;            // Run-in expressed in Frame intervals
   Workarounds workarounds;      // Special work-around flags that
                                 // constrain the syntax to suit
                                 // the foibles of particular MPEG
@@ -93,8 +90,11 @@ enum StreamKind
     AC3_AUDIO,
     LPCM_AUDIO,
     DTS_AUDIO,
-    MPEG_VIDEO,
-    SUBP_STREAM,
+    MPEG_VIDEO
+#ifdef ZALPHA
+    ,
+    Z_ALPHA
+#endif
   };
 
 class JobStream
@@ -117,30 +117,44 @@ class MultiplexJob : public MultiplexParams
 public:
   MultiplexJob();
   virtual ~MultiplexJob();
+  virtual void SetFromCmdLine( unsigned int argc, char *argv[]);
+  virtual PS_Stream *GetOutputStream(
+			   unsigned mpeg,
+               unsigned int sector_size,
+               const char *filename_pat,
+               off_t max_segment_size // 0 = No Limit
+			   );
   unsigned int NumberOfTracks( StreamKind kind );
-  void GetInputStreams( vector<JobStream *> &streams, StreamKind kind );
+  void GetJobStreams( vector<JobStream *> &streams, StreamKind kind );
 
-  void SetupInputStreams( vector<IBitStream *> &inputs );
 protected:
+  virtual void InputStreamsFromCmdLine (unsigned int argc, char* argv[] );
+  virtual void Usage(char *program_name);
+  virtual bool ParseVideoOpt( const char *optarg );
+  virtual bool ParseLpcmOpt( const char *optarg );
+  virtual bool ParseWorkaroundOpt( const char *optarg );
 
 public:  
   vector<JobStream *> streams;
   vector<LpcmParams *> lpcm_param;
   vector<VideoParams *> video_param;
-  vector<SubtitleStreamParams*> subtitle_params;
   unsigned int audio_tracks;
   unsigned int video_tracks;
-  unsigned int subtitle_tracks;
   unsigned int lpcm_tracks;
+#ifdef ZALPHA
+  unsigned int z_alpha_tracks;
+#endif
 };
+
 
 
 /*************************************************************************
     Program ID
 *************************************************************************/
  
-#define MPLEX_VER    "2.2.7"
+#define MPLEX_VER    "2.2.2"
 #define MPLEX_DATE   "$Date$"
+
 
 #endif // __INTERACT_H__
 

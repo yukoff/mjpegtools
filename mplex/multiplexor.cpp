@@ -1,28 +1,7 @@
-/*
- *  multiplexor.cpp:  Program/System stream Multiplex despatcher 
- *
- *  Copyright (C) 2003 Andrew Stevens <andrew.stevens@philips.com>
- *
- *
- *  This program is free software; you can redistribute it and/or
- *  modify it under the terms of version 2 of the GNU General Public License
- *  as published by the Free Software Foundation.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- */
-
-#define STREAM_LOGGING
+
 #include <config.h>
 #include <math.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include <mjpeg_types.h>
 #include <mjpeg_logging.h>
@@ -32,6 +11,9 @@
 #include "videostrm.hpp"
 #include "stillsstream.hpp"
 #include "audiostrm.hpp"
+#ifdef ZALPHA
+#include "zalphastrm.hpp"
+#endif
 #include "multiplexor.hpp"
 
 
@@ -43,7 +25,7 @@
  *
  ***************/
 
-Multiplexor::Multiplexor(MultiplexJob &job, OutputStream &output, OutputStream *index)
+Multiplexor::Multiplexor(MultiplexJob &job)
 {
     underrun_ignore = 0;
     underruns = 0;
@@ -51,20 +33,16 @@ Multiplexor::Multiplexor(MultiplexJob &job, OutputStream &output, OutputStream *
     InitSyntaxParameters(job);
     InitInputStreams(job);
 
-    psstrm = new PS_Stream(mpeg, sector_size, output, max_segment_size );
-    vdr_index = index;
+	/* Get an output stream object for the job */
+	psstrm = job.GetOutputStream( mpeg, sector_size,
+								  output_filename_pattern, max_segment_size );
+	if( !psstrm )
+	{
+		mjpeg_error_exit1("Failed to optain an output stream");
+	}
+
 }
 
-Multiplexor::~Multiplexor()
-{
-    delete psstrm;
-    while (!estreams.empty()) {
-        delete estreams.back();
-        estreams.pop_back();
-    }
-    vstreams.clear();
-    astreams.clear();
-}
 
 /******************************************************************
  *
@@ -78,9 +56,11 @@ Multiplexor::~Multiplexor()
 
 void Multiplexor::InitSyntaxParameters(MultiplexJob &job)
 {
+    output_filename_pattern = job.outfile_pattern;
 	seg_starts_with_video = false;
 	audio_buffer_size = 4 * 1024;
     mux_format = job.mux_format;
+    vbr = job.VBR;
     packets_per_pack = job.packets_per_pack;
     data_rate = job.data_rate;
     mpeg = job.mpeg;
@@ -89,19 +69,19 @@ void Multiplexor::InitSyntaxParameters(MultiplexJob &job)
     sector_size = job.sector_size;
 	split_at_seq_end = !job.multifile_segment;
     workarounds = job.workarounds;
-    run_in_frames = job.run_in_frames;
-    max_segment_size = static_cast<uint64_t>(job.max_segment_size)
-                       * static_cast<uint64_t>(1024 * 1024);
+    max_segment_size = static_cast<off_t>(job.max_segment_size)
+                       * static_cast<off_t>(1024 * 1024);
     max_PTS = static_cast<clockticks>(job.max_PTS) * CLOCKS;
-	video_delay = static_cast<clockticks>(job.video_offset);
-	audio_delay = static_cast<clockticks>(job.audio_offset);
+	video_delay = static_cast<clockticks>(job.video_offset*CLOCKS/1000);
+	audio_delay = static_cast<clockticks>(job.audio_offset*CLOCKS/1000);
  	switch( mux_format  )
 	{
 	case MPEG_FORMAT_VCD :
 		data_rate = 75*2352;  			 /* 75 raw CD sectors/sec */ 
+	  	vbr = false;
+ 
 	case MPEG_FORMAT_VCD_NSR : /* VCD format, non-standard rate */
 		mjpeg_info( "Selecting VCD output profile");
-		video_buffers_iframe_only = false;
 		mpeg = 1;
 	 	packets_per_pack = 1;
 	  	sys_header_in_pack1 = 0;
@@ -120,13 +100,6 @@ void Multiplexor::InitSyntaxParameters(MultiplexJob &job)
 		sector_align_iframeAUs = false;
         timestamp_iframe_only = false;
 		seg_starts_with_video = true;
-        if( job.video_tracks == 0 )
-        {
-            mjpeg_info( "Audio-only VCD track - variable-bit-rate (VCD2.0)");
-            vbr = true;
-        }
-        else
-            vbr = false;
 		break;
 		
 	case  MPEG_FORMAT_MPEG2 : 
@@ -143,7 +116,6 @@ void Multiplexor::InitSyntaxParameters(MultiplexJob &job)
 		buffers_in_audio = 1;
 		always_buffers_in_audio = 1;
 		vcd_zero_stuffing = 0;
-		vbr = true;
         dtspts_for_all_vau = 0;
         timestamp_iframe_only = false;
         video_buffers_iframe_only = false;
@@ -280,14 +252,9 @@ void Multiplexor::InitSyntaxParameters(MultiplexJob &job)
 		sector_align_iframeAUs = false;
         timestamp_iframe_only = false;
         video_buffers_iframe_only = false;
-        vbr = false;
 		break;
 	}
- 
- if( job.VBR )
-     vbr = true;
- if( job.CBR )
-     vbr = false;
+	
 }
 
 /**************************************
@@ -315,9 +282,9 @@ void Multiplexor::InitInputStreamsForStills(MultiplexJob & job )
     unsigned int frame_interval;
     unsigned int i;
     vector<JobStream *> video_strms;
-    job.GetInputStreams( video_strms, MPEG_VIDEO );
+    job.GetJobStreams( video_strms, MPEG_VIDEO );
     vector<JobStream *> mpa_strms;
-    job.GetInputStreams( mpa_strms, MPEG_AUDIO );
+    job.GetJobStreams( mpa_strms, MPEG_AUDIO );
 
     switch( job.mux_format )
     {
@@ -390,10 +357,14 @@ void Multiplexor::InitInputStreamsForVideo(MultiplexJob & job )
 
     unsigned int audio_track = 0;
     unsigned int video_track = 0;
-    unsigned int subp_track = 0;
 	std::vector<VideoParams *>::iterator vidparm = job.video_param.begin();
 	std::vector<LpcmParams *>::iterator lpcmparm = job.lpcm_param.begin();
-	std::vector<SubtitleStreamParams *>::iterator subpparm = job.subtitle_params.begin();
+
+    if( job.video_tracks < 1 && job.mux_format == MPEG_FORMAT_VCD )
+    {
+        mjpeg_warn( "Multiplexing audio-only for a standard VCD is very inefficient");
+    }
+
     std::vector<JobStream *>::iterator i;
     for( i = job.streams.begin() ; i < job.streams.end() ; ++i )
     {
@@ -458,17 +429,17 @@ void Multiplexor::InitInputStreamsForVideo(MultiplexJob & job )
             ++audio_track;
         }
         break;
-        case SUBP_STREAM :
+#ifdef ZALPHA
+        // just copies the video parameters from the first video stream
+        case Z_ALPHA :
         {
-            // we use audios stream as base class
-            SUBPStream *subpStrm =  new SUBPStream( *(*i)->bs, *subpparm,*this);
-            subpStrm ->Init ( subp_track );
-            estreams.push_back(subpStrm );
-            astreams.push_back(subpStrm );
-            ++subpparm;
-            ++subp_track;
+            ZAlphaStream *zalphaStrm = new ZAlphaStream( *(*i)->bs, *(job.video_param.begin()), *this);
+            zalphaStrm->Init (0);
+            estreams.push_back(zalphaStrm);
+            vstreams.push_back(zalphaStrm);
+            //++vidparm;
         }
-        break;
+#endif		
         }
     }
 }
@@ -559,7 +530,7 @@ segment_state;
  * ever process one frame at a time.
  * @returns the number of run-in sectors needed to fill up the buffers to suit the type of stream being muxed.
  */
-#if 0
+
 unsigned int Multiplexor::RunInSectors()
 {
 	std::vector<ElementaryStream *>::iterator str;
@@ -580,64 +551,6 @@ unsigned int Multiplexor::RunInSectors()
     sectors_delay += astreams.size();
 	return sectors_delay;
 }
-#endif
-clockticks Multiplexor::RunInDelay()
-{
-    std::vector<ElementaryStream *>::iterator str;
-    double frame_interval = 0.0;
-    clockticks delay;
-    
-    // User has specified a particular run-in
-
-    if(vstreams.size() != 0 )
-    {
-        frame_interval = CLOCKS / dynamic_cast<VideoStream *>(vstreams[0])->FrameRate();
-    }
- 
-    if( run_in_frames != 0 ) 
-    {
-        if( frame_interval == 0.0 )
-        {
-            mjpeg_warn( "Run-in specified in frame intervals but no video stream - using 25Hz" );
-            frame_interval = CLOCKS / 25.0;
-        }
-        delay = static_cast<clockticks>(run_in_frames * frame_interval);
-    }
-    else
-    {
-        // No run-in specified: choose something reasonable based on the 
-        // specified buffer sizes
-        unsigned int data_delay = 0;
-
-        for( str = vstreams.begin(); str < vstreams.end(); ++str )
-        {
-            if( MPEG_STILLS_FORMAT( mux_format ) )
-            {
-                data_delay += static_cast<unsigned int>(1.1*(*str)->BufferSize());
-            }
-            else if( vbr )
-                data_delay += (*str)->BufferSize() / 2 ;
-            else
-                data_delay += 2*(*str)->BufferSize() / 3 ;
-        }
-        for( str = astreams.begin(); str < astreams.end(); ++str )
-        {
-            data_delay += 3*(*str)->BufferSize()/4;
-        }
-        ByteposTimecode( data_delay, delay );
-    }
-    
-    // Round delay a multiple of frame interval if its known...
-    if( frame_interval != 0.0 )
-    {
-        return static_cast<clockticks>(static_cast<int>( delay / frame_interval+0.5) * frame_interval);
-    }
-    else
-    {
-        return delay;
-    }
-
-}
 
 /**********************************************************************
  *
@@ -653,6 +566,7 @@ void Multiplexor::Init()
 {
 	std::vector<ElementaryStream *>::iterator str;
 	clockticks delay;
+	unsigned int sectors_delay;
 
 	Pack_struc 			dummy_pack;
 	Sys_header_struc 	dummy_sys_header;	
@@ -661,8 +575,6 @@ void Multiplexor::Init()
 	
 	mjpeg_info("SYSTEMS/PROGRAM stream:");
 	psstrm->Open();
-    if( vdr_index != 0 )
-        vdr_index->Open();
 	
     /* These are used to make (conservative) decisions
 	   about whether a packet should fit into the recieve buffers... 
@@ -686,8 +598,7 @@ void Multiplexor::Init()
 	{
 		switch( (*str)->Kind() )
 		{
-		 case ElementaryStream::audio :
-		 case ElementaryStream::subtitle :
+		case ElementaryStream::audio :
 			(*str)->SetMaxPacketData( 
 				psstrm->PacketPayload( **str, NULL, NULL, 
 									   false, true, false ) 
@@ -723,7 +634,7 @@ void Multiplexor::Init()
 	 formats. */
 	   
 	 
-	dmux_rate = static_cast<int>(1.0205 * nominal_rate_sum);
+	dmux_rate = static_cast<int>(1.015 * nominal_rate_sum);
 	dmux_rate = (dmux_rate/50 + 25)*50/8;
 	
 	mjpeg_info ("rough-guess multiplexed stream data rate    : %07d", dmux_rate*8 );
@@ -776,12 +687,11 @@ void Multiplexor::Init()
 	   time to fill before decoding starts. Calculate the necessary delays...
 	*/
 
-	//sectors_delay = RunInSectors();
-    //ByteposTimecode( 
-    //        static_cast<bitcount_t>(sectors_delay*sector_transport_size),
-    //        delay );
-    delay = RunInDelay();
-	
+	sectors_delay = RunInSectors();
+
+	ByteposTimecode( 
+		static_cast<bitcount_t>(sectors_delay*sector_transport_size),
+		delay );
     video_delay += delay;
     audio_delay += delay;
 
@@ -797,8 +707,8 @@ void Multiplexor::Init()
         audio_delay += vstreams[0]->BasePTS()-vstreams[0]->BaseDTS();
     }
 
-	mjpeg_info( "Run-in delay = %lld Video delay = %lld Audio delay = %lld",
-             delay / 300,
+	mjpeg_info( "Run-in Sectors = %d Video delay = %lld Audio delay = %lld",
+				sectors_delay,
 				 video_delay / 300,
 				 audio_delay / 300 );
 
@@ -820,39 +730,30 @@ void Multiplexor::MuxStatus(log_level_t level)
 		switch( (*str)->Kind()  )
 		{
 		case ElementaryStream::video :
-            if( (*str)->MuxCompleted() )
-                mjpeg_log( level, "Video %02x: completed", (*str)->stream_id );
-            else
-			    mjpeg_log( level,
-					    "Video %02x: buf=%7d frame=%06d sector=%08d",
-					    (*str)->stream_id,
-					    (*str)->BufferSize()-(*str)->bufmodel.Space(),
-					    (*str)->DecodeOrder(),
-					    (*str)->nsec
-				    );
+			mjpeg_log( level,
+					   "Video %02x: buf=%7d frame=%06d sector=%08d",
+					   (*str)->stream_id,
+					   (*str)->bufmodel.Space(),
+					   (*str)->DecodeOrder(),
+					   (*str)->nsec
+				);
 			break;
 		case ElementaryStream::audio :
-            if( (*str)->MuxCompleted() )
-                 mjpeg_log( level, "Audio %02x: completed", (*str)->stream_id );
-            else
-			    mjpeg_log( level,
-					    "Audio %02x: buf=%7d frame=%06d sector=%08d",
-					    (*str)->stream_id,
-					    (*str)->BufferSize()-(*str)->bufmodel.Space(),
-					    (*str)->DecodeOrder(),
-					    (*str)->nsec
-				    );
+			mjpeg_log( level,
+					   "Audio %02x: buf=%7d frame=%06d sector=%08d",
+					   (*str)->stream_id,
+					   (*str)->bufmodel.Space(),
+					   (*str)->DecodeOrder(),
+					   (*str)->nsec
+				);
 			break;
 		default :
-            if( (*str)->MuxCompleted() )
-                 mjpeg_log( level, "Other %02x: completed", (*str)->stream_id );
-            else
-			    mjpeg_log( level,
-					    "Other %02x: buf=%7d sector=%08d",
-					    (*str)->stream_id,
-					    (*str)->bufmodel.Space(),
-					    (*str)->nsec
-				    );
+			mjpeg_log( level,
+					   "Other %02x: buf=%7d sector=%08d",
+					   (*str)->stream_id,
+					   (*str)->bufmodel.Space(),
+					   (*str)->nsec
+				);
 			break;
 		}
 	}
@@ -911,9 +812,6 @@ void Multiplexor::OutputPrefix( )
 		{
 				mjpeg_error_exit1("VCD man only have max. 1 audio and 1 video stream");
 		}
-
-        if( vstreams.size() > 0 )
-        {
 		/* First packet carries video-info-only sys_header */
 		psstrm->CreateSysHeader (&sys_header, mux_rate, 
 								 false, true, 
@@ -921,20 +819,15 @@ void Multiplexor::OutputPrefix( )
 		sys_header_ptr = &sys_header;
 		pack_header_ptr = &pack_header;
 	  	OutputPadding( false);		
-        }
 
-        if( astreams.size() > 0 )
-        {
-
-            /* Second packet carries audio-info-only sys_header */
-            psstrm->CreateSysHeader (&sys_header, mux_rate,  
-                                     false, true, 
-                                     true, true, amux );
-            sys_header_ptr = &sys_header;
-            pack_header_ptr = &pack_header;
-            OutputPadding( true );
-        }
-        break;
+		/* Second packet carries audio-info-only sys_header */
+		psstrm->CreateSysHeader (&sys_header, mux_rate,  
+                                 false, true, 
+								 true, true, amux );
+		sys_header_ptr = &sys_header;
+		pack_header_ptr = &pack_header;
+	  	OutputPadding( true );
+		break;
 		
 	case MPEG_FORMAT_SVCD :
 	case MPEG_FORMAT_SVCD_NSR :
@@ -1072,7 +965,7 @@ void Multiplexor::Multiplex()
 	std::vector<bool> completed;
 	std::vector<bool>::iterator pcomp;
 	std::vector<ElementaryStream *>::iterator str;
-	
+
 	unsigned int packets_left_in_pack = 0; /* Suppress warning */
 	bool padding_packet;
 	bool video_first = true;
@@ -1135,7 +1028,7 @@ void Multiplexor::Multiplex()
 			/* Otherwise we write the stream suffix and start a new
 			   stream file */
 			OutputSuffix();
-			psstrm->NextSegment();
+			psstrm->NextFile();
 
 			running_out = false;
 			seg_state = start_segment;
@@ -1150,7 +1043,7 @@ void Multiplexor::Multiplex()
 		case start_segment :
 			mjpeg_info( "New sequence commences..." );
 			SetPosAndSCR(0);
-			MuxStatus( mjpeg_loglev_t("info") );
+			MuxStatus( LOG_INFO );
 
 			for( str = estreams.begin(); str < estreams.end(); ++str )
 			{
@@ -1207,32 +1100,32 @@ void Multiplexor::Multiplex()
 			master = 
 				vstreams.size() > 0 ? 
 				static_cast<VideoStream*>(vstreams[0]) : 0 ;
-			if( psstrm->SegmentLimReached() )
+			if( psstrm->FileLimReached() )
 			{
 				if( split_at_seq_end )
                     mjpeg_warn( "File size exceeded before split-point in video stream" );
                 mjpeg_info( "Starting new output file...");
-                psstrm->NextSegment();
+                psstrm->NextFile();
 			}
-			else if( master != 0 && master->SeqEndRunOut() )
+			else if( master != 0 && master->EndSeq() )
 			{
-                const AUnit *nextIframe = master->NextIFrame();
-				if(  split_at_seq_end && nextIframe != 0)
+				if(  split_at_seq_end && master->Lookahead( ) != 0 )
 				{
-					runout_PTS = master->RequiredPTS(nextIframe);
-                    mjpeg_info( "Sequence end marker! Running out...");
-                    mjpeg_info("Run out PTS limit to AU %d %lld SCR=%lld", 
-                               nextIframe->dorder,
-                               runout_PTS/300, 
-                               current_SCR/300 );
-                    MuxStatus( mjpeg_loglev_t("info") );
+					if( ! master->SeqHdrNext() || 
+						master->NextAUType() != IFRAME)
+					{
+						mjpeg_error_exit1( "Sequence split detected %d but no following sequence found...", master->NextAUType());
+					}
+						
+					runout_PTS = master->NextRequiredPTS();
+                    mjpeg_info( "Running out...");
+                    mjpeg_debug("Run out PTS limit to %lld SCR=%lld", 
+                                runout_PTS/300, 
+                                current_SCR/300 );
+                    MuxStatus( LOG_INFO );
 					running_out = true;
 					seg_state = runout_segment;
 				}
-                else
-                {
-                    mjpeg_warn( "Sequence end without following I-frame!" );
-                }
 			}
 			break;
 			
@@ -1256,18 +1149,12 @@ void Multiplexor::Multiplex()
 		for( str = estreams.begin(); str < estreams.end(); ++str )
 		{
 #ifdef STREAM_LOGGING
-            if( (*str)->MuxCompleted() )
-                mjpeg_debug( "%02x: complete", (*str)->stream_id );
-            else
-                mjpeg_debug("%02x: SCR=%lld (%.3f) mux=%d %d reqDTS=%lld ",
-                            (*str)->stream_id,
-                            current_SCR,
-                            static_cast<double>(current_SCR) /(90.0*300.0),
-                            (*str)->MuxPossible(current_SCR),
-                            (*str)->BufferSize()-(*str)->bufmodel.Space(),
-                           (*str)->RequiredDTS()/300
-                            
-				    );
+            mjpeg_debug("STREAM %02x: SCR=%lld mux=%d reqDTS=%lld", 
+                        (*str)->stream_id,
+                        current_SCR /300,
+                        (*str)->MuxPossible(current_SCR),
+                        (*str)->RequiredDTS()/300
+				);
 #endif
 			if( (*str)->MuxPossible(current_SCR) && 
 				( !video_first || (*str)->Kind() == ElementaryStream::video )
@@ -1294,7 +1181,7 @@ void Multiplexor::Multiplex()
 							despatch->stream_id, 
 							current_SCR/300, 
 							earliest/300 );
-				MuxStatus( mjpeg_loglev_t("warn") );
+				MuxStatus( LOG_WARN );
 				// Give the stream a chance to recover
 				underrun_ignore = 300;
 				++underruns;
@@ -1328,11 +1215,8 @@ void Multiplexor::Multiplex()
                 {
                     clockticks change_time = (*str)->bufmodel.NextChange();
                     if( next_change == 0 || change_time < next_change )
-                    {
                         next_change = change_time;
-                    }
                 }
-
                 unsigned int bumps = 5;
                 while( bumps > 0 
                        && next_change > current_SCR + ticks_per_sector)
@@ -1340,7 +1224,6 @@ void Multiplexor::Multiplex()
                     NextPosAndSCR();
                     --bumps;
                 }
-                            
             }
             else
             {
@@ -1360,7 +1243,7 @@ void Multiplexor::Multiplex()
 				packets_left_in_pack = packets_per_pack;
 		}
 
-		MuxStatus( mjpeg_loglev_t("debug") );
+		MuxStatus( LOG_DEBUG );
 		/* Unless sys headers are always required we turn them off after the first
 		   packet has been generated */
 		include_sys_header = always_sys_header_in_pack;
@@ -1371,8 +1254,8 @@ void Multiplexor::Multiplex()
 		{
 			if( !(*pcomp) && (*str)->MuxCompleted() )
 			{
-				mjpeg_info( "STREAM %02x completed", (*str)->stream_id );
-				MuxStatus( mjpeg_loglev_t("debug") );
+				mjpeg_info( "STREAM %02x completed @ frame %d.", (*str)->stream_id, (*str)->DecodeOrder() );
+				MuxStatus( LOG_DEBUG );
 				(*pcomp) = true;
 			}
 			++str;
@@ -1383,11 +1266,8 @@ void Multiplexor::Multiplex()
 	
 	OutputSuffix( );
 	psstrm->Close();
-    if( vdr_index != 0)
-        vdr_index->Close();
-        
 	mjpeg_info( "Multiplex completion at SCR=%lld.", current_SCR/300);
-	MuxStatus( mjpeg_loglev_t("info") );
+	MuxStatus( LOG_INFO );
 	for( str = estreams.begin(); str < estreams.end(); ++str )
 	{
 		(*str)->Close();
@@ -1439,16 +1319,14 @@ unsigned int Multiplexor::PacketPayload( MuxStream &strm, bool buffers,
 @param returns the written bytes/packets (?)
 ***************************************************/
 
-struct VDRtIndex { uint32_t offset; uint8_t type; uint8_t number; uint16_t reserved; };
-
 unsigned int 
 Multiplexor::WritePacket( unsigned int     max_packet_data_size,
-                                    MuxStream        &strm,
-                                    bool 	 buffers,
-                                    clockticks   	 PTS,
-                                    clockticks   	 DTS,
-                                    uint8_t 	 timestamps
-	                     )
+                           MuxStream        &strm,
+                           bool 	 buffers,
+                           clockticks   	 PTS,
+                           clockticks   	 DTS,
+                           uint8_t 	 timestamps
+	)
 {
     unsigned int written =
         psstrm->CreateSector ( pack_header_ptr,
@@ -1462,42 +1340,6 @@ Multiplexor::WritePacket( unsigned int     max_packet_data_size,
                                timestamps );
     NextPosAndSCR();
     return written;
-}
-
-/***************************************************
-
-  IndexLastPacket 
-  - Generate the index data (if any) for the latest
-  packet generated in the specified stream.
-  N.b. should usually called immediately after WritePacket.
-  Its not part of WritePacket because it is not needed
-  for all stream types...
-***************************************************/
-void
-Multiplexor::IndexLastPacket( ElementaryStream &strm, int index_type )
-{
-    switch( strm.Kind() )
-    {
-        case ElementaryStream::video :
-            if( index_type != NOFRAME && vdr_index != 0 )
-            {
-                union _ibuf 
-                {
-                        uint8_t bytes[sizeof(VDRtIndex)];
-                        VDRtIndex istruct;     
-                } indexbuf;
-                
-                indexbuf.istruct.offset = (int)psstrm->LastPackStart();
-                indexbuf.istruct.type = index_type;
-                indexbuf.istruct.number = (int)psstrm->SegmentNum();
-                indexbuf.istruct.reserved = 0;
-                vdr_index->Write( indexbuf.bytes, sizeof(VDRtIndex) );
-                
-            }
-	break;
-        default :
-            abort(); // Currently only video indexing implemented
-    }
 }
 
 /***************************************************
@@ -1565,9 +1407,7 @@ void Multiplexor::OutputPadding (bool vcd_audio_pad)
  *	OutputGOPControlSector
  *  DVD System headers are carried in peculiar sectors carrying 2
  *  PrivateStream2 packets.   We're sticking 0's in the packets
- * for anything other than the substream IDs as they're
- * merely being inserted as place-holders to provide gaps the
- * DVD authoring SW can fill in later.
+ *  as we have no idea what's supposed to be in there.
  *
  * Thanks to Brent Byeler who worked out this work-around.
  *
@@ -1580,11 +1420,11 @@ void Multiplexor::OutputDVDPriv2 (	)
     uint8_t *sector_buf = new uint8_t[sector_size];
     unsigned int tozero;
     assert( sector_size == 2048 );
-    psstrm->BufferSectorHeader( sector_buf,
+    PS_Stream::BufferSectorHeader( sector_buf,
                                 pack_header_ptr,
                                 &sys_header,
                                 index );
-    psstrm->BufferPacketHeader( index,
+    PS_Stream::BufferPacketHeader( index,
                                    PRIVATE_STR_2,
                                    2,      // MPEG 2
                                    false,  // No buffers
@@ -1598,11 +1438,10 @@ void Multiplexor::OutputDVDPriv2 (	)
                                    index );
     tozero = sector_buf+1024-index;
     memset( index, 0, tozero);
-    index[0] = 0x00; // Substream 1 (PCI)
     index += tozero;
-    psstrm->BufferPacketSize( packet_size_field, index );    
+    PS_Stream::BufferPacketSize( packet_size_field, index );    
 
-    psstrm->BufferPacketHeader( index,
+    PS_Stream::BufferPacketHeader( index,
                                    PRIVATE_STR_2,
                                    2,      // MPEG 2
                                    false,  // No buffers
@@ -1616,9 +1455,8 @@ void Multiplexor::OutputDVDPriv2 (	)
                                    index );
     tozero = sector_buf+2048-index;
     memset( index, 0, tozero );
-    index[0] = 0x01; // Substream 1 (DSI)
     index += tozero;
-    psstrm->BufferPacketSize( packet_size_field, index );
+    PS_Stream::BufferPacketSize( packet_size_field, index );
 
     WriteRawSector( sector_buf, sector_size );
 
