@@ -4,7 +4,7 @@
  *               Stream format is described at the end of this file.
  *
  *
- *  Copyright (C) 2004 Matthew J. Marjanovic <maddog@mir.com>
+ *  Copyright (C) 2001 Matthew J. Marjanovic <maddog@mir.com>
  *
  *
  *  This program is free software; you can redistribute it and/or
@@ -27,9 +27,7 @@
 
 #include <stdlib.h>
 #include <mjpeg_types.h>
-#ifndef _WIN32
 #include <unistd.h>
-#endif
 #include <mjpeg_logging.h>
 
 
@@ -45,50 +43,12 @@
 #define Y4M_ERR_EOF     6  /* end-of-file (clean) */
 #define Y4M_ERR_XXTAGS  7  /* too many xtags */
 #define Y4M_ERR_BADEOF  8  /* unexpected end-of-file */
-#define Y4M_ERR_FEATURE 9  /* stream requires features beyond allowed level */
 
 
 /* generic 'unknown' value for integer parameters (e.g. interlace, height) */
 #define Y4M_UNKNOWN -1
 
-/************************************************************************
- * values for the "interlace" parameter [y4m_*_interlace()]
- ************************************************************************/
-#define Y4M_ILACE_NONE          0   /* non-interlaced, progressive frame */
-#define Y4M_ILACE_TOP_FIRST     1   /* interlaced, top-field first       */
-#define Y4M_ILACE_BOTTOM_FIRST  2   /* interlaced, bottom-field first    */
-#define Y4M_ILACE_MIXED         3   /* mixed, "refer to frame header"    */
 
-/************************************************************************
- * values for the "chroma" parameter [y4m_*_chroma()]
- ************************************************************************/
-#define Y4M_CHROMA_420JPEG     0  /* 4:2:0, H/V centered, for JPEG/MPEG-1 */
-#define Y4M_CHROMA_420MPEG2    1  /* 4:2:0, H cosited, for MPEG-2         */
-#define Y4M_CHROMA_420PALDV    2  /* 4:2:0, alternating Cb/Cr, for PAL-DV */
-#define Y4M_CHROMA_444         3  /* 4:4:4, no subsampling, phew.         */
-#define Y4M_CHROMA_422         4  /* 4:2:2, H cosited                     */
-#define Y4M_CHROMA_411         5  /* 4:1:1, H cosited                     */
-#define Y4M_CHROMA_MONO        6  /* luma plane only                      */
-#define Y4M_CHROMA_444ALPHA    7  /* 4:4:4 with an alpha channel          */
-
-/************************************************************************
- * values for sampling parameters [y4m_*_spatial(), y4m_*_temporal()]
- ************************************************************************/
-#define Y4M_SAMPLING_PROGRESSIVE 0
-#define Y4M_SAMPLING_INTERLACED  1
-
-/************************************************************************
- * values for "presentation" parameter [y4m_*_presentation()]
- ************************************************************************/
-#define Y4M_PRESENT_TOP_FIRST         0  /* top-field-first                 */
-#define Y4M_PRESENT_TOP_FIRST_RPT     1  /* top-first, repeat top           */
-#define Y4M_PRESENT_BOTTOM_FIRST      2  /* bottom-field-first              */
-#define Y4M_PRESENT_BOTTOM_FIRST_RPT  3  /* bottom-first, repeat bottom     */
-#define Y4M_PRESENT_PROG_SINGLE       4  /* single progressive frame        */
-#define Y4M_PRESENT_PROG_DOUBLE       5  /* progressive frame, repeat once  */
-#define Y4M_PRESENT_PROG_TRIPLE       6  /* progressive frame, repeat twice */
-
-#define Y4M_MAX_NUM_PLANES 4
 
 /************************************************************************
  *  'ratio' datatype, for rational numbers
@@ -138,23 +98,70 @@ extern const y4m_ratio_t y4m_dar_16_9;    /* widescreen TV */
 extern const y4m_ratio_t y4m_dar_221_100; /* word-to-your-mother TV */
 
 
+/************************************************************************
+ *  'xtag_list' --- list of unparsed and/or meta/X header tags
+ *
+ *     Do not touch this structure directly!
+ *
+ *     Use the y4m_xtag_*() functions (see below).
+ *     You must initialize/finalize this structure before/after use.
+ ************************************************************************/
 #define Y4M_MAX_XTAGS 32        /* maximum number of xtags in list       */
 #define Y4M_MAX_XTAG_SIZE 32    /* max length of an xtag (including 'X') */
+typedef struct _y4m_xtag_list {
+  int count;
+  char *tags[Y4M_MAX_XTAGS];
+} y4m_xtag_list_t;
 
-typedef struct _y4m_xtag_list y4m_xtag_list_t;
-typedef struct _y4m_stream_info y4m_stream_info_t;
-typedef struct _y4m_frame_info y4m_frame_info_t;
+
+
+/************************************************************************
+ *  'stream_info' --- stream header information
+ *
+ *     Do not touch this structure directly!
+ *
+ *     Use the y4m_si_*() functions (see below).
+ *     You must initialize/finalize this structure before/after use.
+ ************************************************************************/
+typedef struct _y4m_stream_info {
+  /* values from header */
+  int width;
+  int height;
+  int interlace;            /* see Y4M_ILACE_* definitions below   */
+  y4m_ratio_t framerate;    /* frames-per-second;   0:0 == unknown */
+  y4m_ratio_t sampleaspect; /* pixel width/height;  0:0 == unknown */
+  /* computed/derivative values */
+  int framelength;    /* bytes of data per frame (not including header) */
+  /* mystical X tags */
+  y4m_xtag_list_t x_tags;
+} y4m_stream_info_t;
+
+/* possible options for the interlace parameter */
+#define Y4M_ILACE_NONE          0   /* non-interlaced, progressive frame */
+#define Y4M_ILACE_TOP_FIRST     1   /* interlaced, top-field first       */
+#define Y4M_ILACE_BOTTOM_FIRST  2   /* interlaced, bottom-field first    */
+
+
+/************************************************************************
+ *  'frame_info' --- frame header information
+ *
+ *     Do not touch this structure directly!
+ *
+ *     Use the y4m_fi_*() functions (see below).
+ *     You must initialize/finalize this structure before/after use.
+ ************************************************************************/
+typedef struct _y4m_frame_info {
+  /* mystical X tags */
+  y4m_xtag_list_t x_tags;
+} y4m_frame_info_t;
+
 
 
 #ifdef __cplusplus
-#define BEGIN_CDECLS extern "C" {
-#define END_CDECLS   }
+extern "C" {
 #else
-#define BEGIN_CDECLS 
-#define END_CDECLS   
 #endif
 
-BEGIN_CDECLS
 
 /************************************************************************
  *  'ratio' functions
@@ -182,36 +189,6 @@ int y4m_parse_ratio(y4m_ratio_t *r, const char *s);
  *
  *************************************************************************/
 y4m_ratio_t y4m_guess_sar(int width, int height, y4m_ratio_t dar);
-
-
-/*************************************************************************
- *
- * Chroma Subsampling Mode information
- *
- *  x_ratio, y_ratio  -  subsampling of chroma planes
- *  x_offset, y_offset - offset of chroma sample grid,
- *                        relative to luma (0,0) sample
- *
- *************************************************************************/
-
-y4m_ratio_t y4m_chroma_ss_x_ratio(int chroma_mode);
-y4m_ratio_t y4m_chroma_ss_y_ratio(int chroma_mode);
-#if 0
-y4m_ratio_t y4m_chroma_ss_x_offset(int chroma_mode, int field, int plane);
-y4m_ratio_t y4m_chroma_ss_y_offset(int chroma_mode, int field, int plane);
-#endif
-
-/* Given a string containing a (case-insensitive) chroma-tag keyword,
-   return appropriate chroma mode (or Y4M_UNKNOWN) */
-int y4m_chroma_parse_keyword(const char *s);
-
-/* Given a Y4M_CHROMA_* mode, return appropriate chroma-tag keyword,
-   or NULL if there is none. */
-const char *y4m_chroma_keyword(int chroma_mode);
-
-/* Given a Y4M_CHROMA_* mode, return appropriate chroma mode description,
-   or NULL if there is none. */
-const char *y4m_chroma_description(int chroma_mode);
 
 
 
@@ -281,38 +258,22 @@ void y4m_init_stream_info(y4m_stream_info_t *i);
 /* finalize a stream_info structure */
 void y4m_fini_stream_info(y4m_stream_info_t *i);
 
-/* reset stream_info back to default/unknown values */
-void y4m_clear_stream_info(y4m_stream_info_t *info);
-
 /* make one stream_info into a copy of another */
 void y4m_copy_stream_info(y4m_stream_info_t *dest,
 			  const y4m_stream_info_t *src);
 
 /* access or set stream_info fields */
-/*      level 0                   */
-int y4m_si_get_width(const y4m_stream_info_t *si);
-int y4m_si_get_height(const y4m_stream_info_t *si);
-int y4m_si_get_interlace(const y4m_stream_info_t *si);
-y4m_ratio_t y4m_si_get_framerate(const y4m_stream_info_t *si);
-y4m_ratio_t y4m_si_get_sampleaspect(const y4m_stream_info_t *si);
 void y4m_si_set_width(y4m_stream_info_t *si, int width);
+int y4m_si_get_width(const y4m_stream_info_t *si);
 void y4m_si_set_height(y4m_stream_info_t *si, int height);
+int y4m_si_get_height(const y4m_stream_info_t *si);
 void y4m_si_set_interlace(y4m_stream_info_t *si, int interlace);
+int y4m_si_get_interlace(const y4m_stream_info_t *si);
 void y4m_si_set_framerate(y4m_stream_info_t *si, y4m_ratio_t framerate);
+y4m_ratio_t y4m_si_get_framerate(const y4m_stream_info_t *si);
 void y4m_si_set_sampleaspect(y4m_stream_info_t *si, y4m_ratio_t sar);
-/*      level 1                   */
-void y4m_si_set_chroma(y4m_stream_info_t *si, int chroma_mode);
-int y4m_si_get_chroma(const y4m_stream_info_t *si);
-
-/* derived quantities (no setter) */
-/*      level 0                   */
+y4m_ratio_t y4m_si_get_sampleaspect(const y4m_stream_info_t *si);
 int y4m_si_get_framelength(const y4m_stream_info_t *si);
-/*      level 1                   */
-int y4m_si_get_plane_count(const y4m_stream_info_t *si);
-int y4m_si_get_plane_width(const y4m_stream_info_t *si, int plane);
-int y4m_si_get_plane_height(const y4m_stream_info_t *si, int plane);
-int y4m_si_get_plane_length(const y4m_stream_info_t *si, int plane);
-
 
 /* access stream_info xtag_list */
 y4m_xtag_list_t *y4m_si_xtags(y4m_stream_info_t *si);
@@ -324,26 +285,13 @@ void y4m_init_frame_info(y4m_frame_info_t *i);
 /* finalize a frame_info structure */
 void y4m_fini_frame_info(y4m_frame_info_t *i);
 
-/* reset frame_info back to default/unknown values */
-void y4m_clear_frame_info(y4m_frame_info_t *info);
-
 /* make one frame_info into a copy of another */
 void y4m_copy_frame_info(y4m_frame_info_t *dest,
 			 const y4m_frame_info_t *src);
 
-
-/* access or set frame_info fields (level 1) */
-int y4m_fi_get_presentation(const y4m_frame_info_t *fi);
-int y4m_fi_get_temporal(const y4m_frame_info_t *fi);
-int y4m_fi_get_spatial(const y4m_frame_info_t *fi);
-
-void y4m_fi_set_presentation(y4m_frame_info_t *fi, int pres);
-void y4m_fi_set_temporal(y4m_frame_info_t *fi, int sampling);
-void y4m_fi_set_spatial(y4m_frame_info_t *fi, int sampling);
-
-
 /* access frame_info xtag_list */
 y4m_xtag_list_t *y4m_fi_xtags(y4m_frame_info_t *fi);
+
 
 
 /************************************************************************
@@ -363,34 +311,6 @@ ssize_t y4m_read(int fd, void *buf, size_t len);
 /* write len bytes from fd into buf */
 ssize_t y4m_write(int fd, const void *buf, size_t len);
 
-/************************************************************************
- *  callback based read and write
- *
- *  The structures y4m_cb_reader_t and y4m_cb_writer_t must be
- *  set up by the caller before and of the *_read_*_cb() or
- *  *_write_*_cb() functions are called. Te return values of
- *  the read() and write() members have the same meaning as for
- *  y4m_read() and y4m_write()
- *
- ************************************************************************/
-
-typedef struct y4m_cb_reader_s
-  {
-  void * data;
-  ssize_t (*read)(void * data, void *buf, size_t len);
-  } y4m_cb_reader_t;
-
-typedef struct y4m_cb_writer_s
-  {
-  void * data;
-  ssize_t (*write)(void * data, const void *buf, size_t len);
-  } y4m_cb_writer_t;
-
-/* read len bytes from fd into buf */
-ssize_t y4m_read_cb(y4m_cb_reader_t * fd, void *buf, size_t len);
-
-/* write len bytes from fd into buf */
-ssize_t y4m_write_cb(y4m_cb_writer_t * fd, const void *buf, size_t len);
 
 
 /************************************************************************
@@ -405,19 +325,12 @@ ssize_t y4m_write_cb(y4m_cb_writer_t * fd, const void *buf, size_t len);
 /* parse a string of stream header tags */
 int y4m_parse_stream_tags(char *s, y4m_stream_info_t *i);
 
-/* read a stream header from file descriptor fd
-   (the current contents of stream_info are erased first) */
+/* read a stream header from file descriptor fd */
 int y4m_read_stream_header(int fd, y4m_stream_info_t *i);
-
-/* read a stream header with a callback reader
-   (the current contents of stream_info are erased first) */
-int y4m_read_stream_header_cb(y4m_cb_reader_t * fd, y4m_stream_info_t *i);
 
 /* write a stream header to file descriptor fd */
 int y4m_write_stream_header(int fd, const y4m_stream_info_t *i);
 
-/* write a stream header with a callback writer */
-int y4m_write_stream_header_cb(y4m_cb_writer_t * fd, const y4m_stream_info_t *i);
 
 
 /************************************************************************
@@ -429,122 +342,44 @@ int y4m_write_stream_header_cb(y4m_cb_writer_t * fd, const y4m_stream_info_t *i)
  *
  ************************************************************************/
 
+/* read a frame header from file descriptor fd */
+int y4m_read_frame_header(int fd, y4m_frame_info_t *i);
+
 /* write a frame header to file descriptor fd */
-int y4m_write_frame_header(int fd,
-			   const y4m_stream_info_t *si,
-			   const y4m_frame_info_t *fi);
+int y4m_write_frame_header(int fd, const y4m_frame_info_t *i);
 
-/* write a frame header with a callback writer fd */
-int y4m_write_frame_header_cb(y4m_cb_writer_t * fd,
-			   const y4m_stream_info_t *si,
-			   const y4m_frame_info_t *fi);
-
-/* write a complete frame (header + data) to file descriptor fd
-   o planes[] points to 1-4 buffers, one each for image plane */
-int y4m_write_frame(int fd, const y4m_stream_info_t *si, 
-		    const y4m_frame_info_t *fi, uint8_t * const *planes);
-
-/* write a complete frame (header + data) with a callback writer fd
-   o planes[] points to 1-4 buffers, one each for image plane */
-int y4m_write_frame_cb(y4m_cb_writer_t * fd, const y4m_stream_info_t *si, 
-                       const y4m_frame_info_t *fi, uint8_t * const *planes);
-
-/* write a complete frame (header + data), to file descriptor fd
-    but interleave fields from two separate buffers
-   o upper_field[] same as planes[] above, but for upper field only
-   o lower_field[] same as planes[] above, but for lower field only
-*/
-int y4m_write_fields(int fd, const y4m_stream_info_t *si, 
-		     const y4m_frame_info_t *fi,
-		     uint8_t * const *upper_field, 
-		     uint8_t * const *lower_field);
-
-/* write a complete frame (header + data), with a callback writer fd
-    but interleave fields from two separate buffers
-   o upper_field[] same as planes[] above, but for upper field only
-   o lower_field[] same as planes[] above, but for lower field only
-*/
-int y4m_write_fields_cb(y4m_cb_writer_t * fd, const y4m_stream_info_t *si, 
-                        const y4m_frame_info_t *fi,
-                        uint8_t * const *upper_field, 
-                        uint8_t * const *lower_field);
-
-/* read a frame header from file descriptor fd 
-   (the current contents of frame_info are erased first) */
-int y4m_read_frame_header(int fd,
-			  const y4m_stream_info_t *si,
-			  y4m_frame_info_t *fi);
-
-/* read a frame header with callback reader fd
-   (the current contents of frame_info are erased first) */
-int y4m_read_frame_header_cb(y4m_cb_reader_t * fd,
-                             const y4m_stream_info_t *si,
-                             y4m_frame_info_t *fi);
-
-/* read frame data from file descriptor fd
-   [to be called after y4m_read_frame_header()]
-   o planes[] points to 1-4 buffers, one each for image plane */
-int y4m_read_frame_data(int fd, const y4m_stream_info_t *si, 
-                        y4m_frame_info_t *fi, uint8_t * const *planes);
-
-/* read frame data with callback reader fd
-   [to be called after y4m_read_frame_header_cb()]
-   o planes[] points to 1-4 buffers, one each for image plane */
-int y4m_read_frame_data_cb(y4m_cb_reader_t * fd, const y4m_stream_info_t *si, 
-                           y4m_frame_info_t *fi, uint8_t * const *planes);
-
-/* read frame data from file descriptor fd,
-   but de-interleave fields into two separate buffers
-    [to be called after y4m_read_frame_header()]
-   o upper_field[] same as planes[] above, but for upper field only
-   o lower_field[] same as planes[] above, but for lower field only
-*/
-int y4m_read_fields_data(int fd, const y4m_stream_info_t *si, 
-                         y4m_frame_info_t *fi,
-                         uint8_t * const *upper_field, 
-                         uint8_t * const *lower_field);
-
-/* read frame data with callback reader fd,
-   but de-interleave fields into two separate buffers
-    [to be called after y4m_read_frame_header_cb()]
-   o upper_field[] same as planes[] above, but for upper field only
-   o lower_field[] same as planes[] above, but for lower field only
-*/
-int y4m_read_fields_data_cb(y4m_cb_reader_t * fd,
-                            const y4m_stream_info_t *si, 
-                            y4m_frame_info_t *fi,
-                            uint8_t * const *upper_field, 
-                            uint8_t * const *lower_field);
-
-/* read a complete frame (header + data) from file descriptor fd,
-   o planes[] points to 1-4 buffers, one each for image plane */
+/* read a complete frame (header + data)
+   o yuv[3] points to three buffers, one each for Y, U, V planes */
 int y4m_read_frame(int fd, const y4m_stream_info_t *si, 
-		   y4m_frame_info_t *fi, uint8_t * const *planes);
+		   y4m_frame_info_t *fi, uint8_t * const yuv[3]);
 
-/* read a complete frame (header + data) from callback reader fd,
-   o planes[] points to 1-4 buffers, one each for image plane */
-int y4m_read_frame_cb(y4m_cb_reader_t * fd, const y4m_stream_info_t *si, 
-                      y4m_frame_info_t *fi, uint8_t * const *planes);
+/* write a complete frame (header + data)
+   o yuv[3] points to three buffers, one each for Y, U, V planes */
+int y4m_write_frame(int fd, const y4m_stream_info_t *si, 
+		    const y4m_frame_info_t *fi, uint8_t * const yuv[3]);
 
-/* read a complete frame (header + data) from file descriptor fd,
-   but de-interleave fields into two separate buffers
-   o upper_field[] same as planes[] above, but for upper field only
-   o lower_field[] same as planes[] above, but for lower field only
+
+/* read a complete frame (header + data), but de-interleave fields
+    into two separate buffers
+   o upper_field[3] same as yuv[3] above, but for upper field
+   o lower_field[3] same as yuv[3] above, but for lower field
 */
 int y4m_read_fields(int fd, const y4m_stream_info_t *si, 
 		    y4m_frame_info_t *fi,
-		    uint8_t * const *upper_field, 
-		    uint8_t * const *lower_field);
+		    uint8_t * const upper_field[3], 
+		    uint8_t * const lower_field[3]);
 
-/* read a complete frame (header + data) from callback_reader fd,
-   but de-interleave fields into two separate buffers
-   o upper_field[] same as planes[] above, but for upper field only
-   o lower_field[] same as planes[] above, but for lower field only
+/* write a complete frame (header + data), but interleave fields
+    from two separate buffers
+   o upper_field[3] same as yuv[3] above, but for upper field
+   o lower_field[3] same as yuv[3] above, but for lower field
 */
-int y4m_read_fields_cb(y4m_cb_reader_t * fd, const y4m_stream_info_t *si, 
-                       y4m_frame_info_t *fi,
-                       uint8_t * const *upper_field, 
-                       uint8_t * const *lower_field);
+int y4m_write_fields(int fd, const y4m_stream_info_t *si, 
+		     const y4m_frame_info_t *fi,
+		     uint8_t * const upper_field[3], 
+		     uint8_t * const lower_field[3]);
+
+
 
 /************************************************************************
  *  miscellaneous functions
@@ -570,20 +405,9 @@ const char *y4m_strerr(int err);
 int y4m_allow_unknown_tags(int yn);
 
 
-/* set level of "accepted extensions" for the library...
-    o level = 0:  default - conform to original YUV4MPEG2 spec; yield errors
-                   when reading or writing a stream which exceeds it.
-    o level = 1:  allow reading/writing streams which contain non-420jpeg
-                   chroma and/or mixed-mode interlacing
-    o level = -1: don't change, just return current setting
-
-   return value:  previous setting of level
- */
-int y4m_accept_extensions(int level);
-
-
-END_CDECLS
-
+#ifdef __cplusplus
+}
+#endif
 
 /************************************************************************
  ************************************************************************
@@ -619,7 +443,7 @@ END_CDECLS
      o integer (base 10 ascii representation)
   or o RATIO
   or o single ascii character
-  or o non-whitespace ascii string
+  or o generic ascii string
 
   RATIO consists of
      o numerator (integer)
@@ -630,127 +454,19 @@ END_CDECLS
   The currently supported tags for the STREAM-HEADER:
      W - [integer] frame width, pixels, should be > 0
      H - [integer] frame height, pixels, should be > 0
-     C - [string]  chroma-subsampling/data format
-           420jpeg   (default)
-           420mpeg2
-           420paldv
-           411
-           422
-           444       - non-subsampled Y'CbCr
-	   444alpha  - Y'CbCr with alpha channel (with Y' black/white point)
-           mono      - Y' plane only
      I - [char] interlacing:  p - progressive (none)
-                              t - top-field-first
-                              b - bottom-field-first
-                              m - mixed -- see 'I' tag in frame header
-                              ? - unknown
+                            t - top-field-first
+                            b - bottom-field-first
+		            ? - unknown
      F - [ratio] frame-rate, 0:0 == unknown
      A - [ratio] sample (pixel) aspect ratio, 0:0 == unknown
      X - [character string] 'metadata' (unparsed, but passed around)
 
   The currently supported tags for the FRAME-HEADER:
-     Ixyz - framing/sampling (required if-and-only-if stream is "Im")
-          x:  t - top-field-first
-              T - top-field-first and repeat
-	      b - bottom-field-first
-              B - bottom-field-first and repeat
-              1 - single progressive frame
-              2 - double progressive frame (repeat)
-              3 - triple progressive frame (repeat twice)
-
-          y:  p - progressive:  fields sampled at same time
-              i - interlaced:   fields sampled at different times
-
-          z:  p - progressive:  subsampling over whole frame
-              i - interlaced:   each field subsampled independently
-              ? - unknown (allowed only for non-4:2:0 subsampling)           
-       
      X - character string 'metadata' (unparsed, but passed around)
 
  ************************************************************************
  ************************************************************************/
-
-
-/*
-
-   THAT'S ALL FOLKS!
-
-   Thank you for reading the source code.  We hope you have thoroughly
-   enjoyed the experience.
-
-*/
-
-
-
-
-
-#ifdef INTERNAL_Y4M_LIBCODE_STUFF_QPX
-#define Y4MPRIVATIZE(identifier) identifier
-#else
-#define Y4MPRIVATIZE(identifier) PRIVATE##identifier
-#endif
-
-/* 
- * Actual structure definitions of structures which you shouldn't touch.
- *
- */
-
-/************************************************************************
- *  'xtag_list' --- list of unparsed and/or meta/X header tags
- *
- *     Do not touch this structure directly!
- *
- *     Use the y4m_xtag_*() functions (see below).
- *     You must initialize/finalize this structure before/after use.
- ************************************************************************/
-struct _y4m_xtag_list {
-  int Y4MPRIVATIZE(count);
-  char *Y4MPRIVATIZE(tags)[Y4M_MAX_XTAGS];
-};
-
-
-/************************************************************************
- *  'stream_info' --- stream header information
- *
- *     Do not touch this structure directly!
- *
- *     Use the y4m_si_*() functions (see below).
- *     You must initialize/finalize this structure before/after use.
- ************************************************************************/
-struct _y4m_stream_info {
-  /* values from header/setters */
-  int Y4MPRIVATIZE(width);
-  int Y4MPRIVATIZE(height);
-  int Y4MPRIVATIZE(interlace);            /* see Y4M_ILACE_* definitions  */
-  y4m_ratio_t Y4MPRIVATIZE(framerate);    /* see Y4M_FPS_* definitions    */
-  y4m_ratio_t Y4MPRIVATIZE(sampleaspect); /* see Y4M_SAR_* definitions    */
-  int Y4MPRIVATIZE(chroma);               /* see Y4M_CHROMA_* definitions */
-
-  /* mystical X tags */
-  y4m_xtag_list_t Y4MPRIVATIZE(x_tags);
-};
-
-
-/************************************************************************
- *  'frame_info' --- frame header information
- *
- *     Do not touch this structure directly!
- *
- *     Use the y4m_fi_*() functions (see below).
- *     You must initialize/finalize this structure before/after use.
- ************************************************************************/
-
-struct _y4m_frame_info {
-  int Y4MPRIVATIZE(spatial);      /* see Y4M_SAMPLING_* definitions */
-  int Y4MPRIVATIZE(temporal);     /* see Y4M_SAMPLING_* definitions */
-  int Y4MPRIVATIZE(presentation); /* see Y4M_PRESENT_* definitions  */
-  /* mystical X tags */
-  y4m_xtag_list_t Y4MPRIVATIZE(x_tags);
-};
-
-
-#undef Y4MPRIVATIZE
-
 
 #endif /* __YUV4MPEG_H__ */
 
