@@ -52,10 +52,12 @@
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
+#ifdef HAVE_FENV_H
+#include <fenv.h>
+#endif
 #include "syntaxconsts.h"
 #include "fastintfns.h"
 #include "cpu_accel.h"
-#include "tables.h"
 #include "simd.h"
 #include "quantize_ref.h"
 #include "quantize_precomp.h"
@@ -63,20 +65,35 @@
 #ifdef HAVE_ALTIVEC
 void enable_altivec_quantization(struct QuantizerCalls *calls, int opt_mpeg1);
 #endif
-#if defined(HAVE_ASM_MMX)
-void init_x86_quantization( struct QuantizerCalls *calls,
-                            struct QuantizerWorkSpace *wsp,
-                            int mpeg1 );
+#if defined(HAVE_ASM_MMX) && defined(HAVE_ASM_NASM)
+void enable_x86_quantization( struct QuantizerCalls *calls,
+                              int mpeg1 );
 #endif
 
-#define fabsshift ((8*sizeof(unsigned int))-1)
-#define signmask(x) (((int)x)>>fabsshift)
-static inline int intsamesign(int x, int y)
+/* non-linear quantization coefficient table */
+const uint8_t non_linear_mquant_table[32] =
 {
-	return (y+(signmask(x) & -(y<<1)));
-}
-#undef signmask
-#undef fabsshift
+	0, 1, 2, 3, 4, 5, 6, 7,
+	8,10,12,14,16,18,20,22,
+	24,28,32,36,40,44,48,52,
+	56,64,72,80,88,96,104,112
+};
+
+/* non-linear mquant table for mapping from scale to code
+ * since reconstruction levels are not bijective with the index map,
+ * it is up to the designer to determine most of the quantization levels
+ */
+
+const uint8_t map_non_linear_mquant[113] =
+{
+	0,1,2,3,4,5,6,7,8,8,9,9,10,10,11,11,12,12,13,13,14,14,15,15,16,16,
+	16,17,17,17,18,18,18,18,19,19,19,19,20,20,20,20,21,21,21,21,22,22,
+	22,22,23,23,23,23,24,24,24,24,24,24,24,25,25,25,25,25,25,25,26,26,
+	26,26,26,26,26,26,27,27,27,27,27,27,27,27,28,28,28,28,28,28,28,29,
+	29,29,29,29,29,29,29,29,29,30,30,30,30,30,30,30,31,31,31,31,31
+};
+
+
 
 /*
  * Return the code for a quantisation level
@@ -91,10 +108,12 @@ int quant_code(  int q_scale_type, int mquant )
  *
  * Computes the next quantisation up.  Used to avoid saturation
  * in macroblock coefficients - common in MPEG-1 - which causes
- * nasty artifacts.
+ * nasty artefacts.
  *
  * NOTE: Does no range checking...
+ *
  */
+ 
 
 int next_larger_quant( int q_scale_type, int quant )
 {
@@ -137,10 +156,11 @@ void quant_intra( struct QuantizerWorkSpace *wsp,
   int x, y, d;
   int clipping;
   int mquant = *nonsat_mquant;
-  uint16_t *quant_mat = wsp->intra_q_tbl[mquant] /* intra_q_mat * mquant */;
+  uint16_t *quant_mat = wsp->intra_q_tbl[mquant] /* intra_q */;
+
   /* 
    * Complicate by handlin clipping by increasing quantisation.  This
-   * seems to avoid nasty artifacts in some situations...
+   * seems to avoid nasty artefacts in some situations...
    */
 
   do
@@ -158,24 +178,34 @@ void quant_intra( struct QuantizerWorkSpace *wsp,
 		for (i=1; i<64 ; i++)
 		  {
 			x = psrc[i];
-#ifdef ORIGINAL_CODE
-			d = wsp->intra_q_mat[i];
-			y = (16*(x >= 0 ? x : -x) + (d>>1))/d; /* round(32*x/quant_mat) */
-			d = (3*mquant+2)>>2;
-			y = (y+d)/mquant; /* (y+0.75*mquant) / mquant) */
-#else
-
 			d = quant_mat[i];
-			y = ((abs(x)<<5)  + d ) /(d<<1);
-#endif
-            if ( y > clipvalue )
-            {
-              clipping = 1;
-              mquant = next_larger_quant(q_scale_type, mquant );
-              quant_mat = wsp->intra_q_tbl[mquant];
-              break;
-            }
+#ifdef ORIGINAL_CODE
+			y = (32*(x >= 0 ? x : -x) + (d>>1))/d; /* round(32*x/quant_mat) */
+			d = (3*mquant+2)>>2;
+			y = (y+d)/(2*mquant); /* (y+0.75*mquant) / (2*mquant) */
 
+			/* clip to syntax limits */
+			if (y > 255)
+			  {
+				if (mpeg1)
+				  y = 255;
+				else if (y > 2047)
+				  y = 2047;
+			  }
+#else
+			/* RJ: save one divide operation */
+			y = ((abs(x)<<5)+ ((3*quant_mat[i])>>2))/(quant_mat[i]<<1)
+				/*(32*abs(x) + (d>>1) + d*((3*mquant+2)>>2))/(quant_mat[i]*2*mquant) */
+				;
+			if ( y > clipvalue )
+            {
+				clipping = 1;
+				mquant = next_larger_quant(q_scale_type, mquant );
+				quant_mat = wsp->intra_q_tbl[mquant];
+				break;
+            }
+#endif
+		  
 		  	pbuf[i] = intsamesign(x,y);
 		  }
 		pbuf += 64;
@@ -225,6 +255,7 @@ static int quant_weight_coeff_inter( struct QuantizerWorkSpace *wsp,
        noisy video are around 20.0.  */
 }
 
+							     
 /* 
  * Quantisation for non-intra blocks using Test Model 5 quantization
  *
@@ -241,7 +272,7 @@ static int quant_weight_coeff_inter( struct QuantizerWorkSpace *wsp,
  * RETURN: A bit-mask of block_count bits indicating non-zero blocks (a 1).
  *
  */
-
+																							     											     
 int quant_non_intra( struct QuantizerWorkSpace *wsp,
                      int16_t *src, int16_t *dst,
 					 int q_scale_type,
@@ -337,6 +368,7 @@ void iquant_intra_m1(struct QuantizerWorkSpace *wsp,
   }
 }
 
+
 /* MPEG-2 inverse quantization */
 void iquant_intra_m2(struct QuantizerWorkSpace *wsp,
                      int16_t *src, int16_t *dst, int dc_prec, int mquant)
@@ -356,11 +388,10 @@ void iquant_intra_m2(struct QuantizerWorkSpace *wsp,
 }
 
 
-void iquant_non_intra_m1(struct QuantizerWorkSpace *wsp,
-                         int16_t *src, int16_t *dst, int mquant )
+
+static void iquant_non_intra_m1_low(int16_t *src, int16_t *dst,  uint16_t *quant_mat)
 {
-    uint16_t *quant_mat = wsp->inter_q_tbl[mquant];
-    int i, val;
+  int i, val;
 
 #ifndef ORIGINAL_CODE
 
@@ -386,17 +417,25 @@ void iquant_non_intra_m1(struct QuantizerWorkSpace *wsp,
     val = abs(src[i]);
     if (val!=0)
     {
-       val = ((val+val+1)*quant_mat[i]) >> 5;
-     /* mismatch control */
-     val -= (~(val&1))&(val!=0);
-        val = fastmin(val, 2047); /* Saturation */
+		val = ((val+val+1)*quant_mat[i]) >> 5;
+		/* mismatch control */
+		val -= (~(val&1))&(val!=0);
+		val = fastmin(val, 2047); /* Saturation */
     }
-   dst[i] = intsamesign(src[i],val);
-  
+	dst[i] = intsamesign(src[i],val);
+	
   }
   
 #endif
+}
 
+
+
+
+void iquant_non_intra_m1(struct QuantizerWorkSpace *wsp,
+                         int16_t *src, int16_t *dst, int mquant )
+{
+    iquant_non_intra_m1_low(src,dst,wsp->inter_q_tbl[mquant]);
 }
 
 void iquant_non_intra_m2(struct QuantizerWorkSpace *wsp,
@@ -412,7 +451,7 @@ void iquant_non_intra_m2(struct QuantizerWorkSpace *wsp,
   {
       val = src[i];
       if (val!=0)
-
+          
 			  val = (int)((2*val+(val>0 ? 1 : -1))*inter_q[i]*mquant)/32;
       sum+= dst[i] = (val>2047) ? 2047 : ((val<-2048) ? -2048 : val);
   }
@@ -477,7 +516,6 @@ void init_quantizer( struct QuantizerCalls *calls,
         {
             wsp->intra_q_tbl[q][i] = intra_q[i] * q;
             wsp->inter_q_tbl[q][i] = inter_q[i] * q;
-
             wsp->intra_q_tblf[q][i] = (float)wsp->intra_q_tbl[q][i];
             wsp->inter_q_tblf[q][i] = (float)wsp->inter_q_tbl[q][i];
             wsp->i_intra_q_tblf[q][i] = (float)(1.0 / (wsp->intra_q_tblf[q][i]));
@@ -503,10 +541,10 @@ void init_quantizer( struct QuantizerCalls *calls,
     calls->pquant_weight_coeff_intra = quant_weight_coeff_intra;
     calls->pquant_weight_coeff_inter = quant_weight_coeff_inter;
     
-#if defined(HAVE_ASM_MMX)
+#if defined(HAVE_ASM_MMX) && defined(HAVE_ASM_NASM)
     if( cpu_accel() )
     {
-        init_x86_quantization( calls, wsp, mpeg1 );
+        enable_x86_quantization( calls, mpeg1 );
     }
 #endif
 #ifdef HAVE_ALTIVEC

@@ -21,13 +21,12 @@
  *
  */
 
+#include <config.h>
 #include <pthread.h>
-#include <deque>
 #include "mjpeg_types.h"
 #include "picture.hh"
 
 class EncoderParams;
-class ImagePlanes;
 struct MPEG2EncInVidParams;
 
 class PictureReader
@@ -36,26 +35,41 @@ public:
 	PictureReader(EncoderParams &encoder );
     virtual ~PictureReader();
     void Init();
-    void ReadPictureData( int num_frame, ImagePlanes &frame);
+    void ReadPictureData( int num_frame, uint8_t **frame);
+    int FrameLumMean( int num_frame );
     virtual void StreamPictureParams( MPEG2EncInVidParams &strm ) = 0;
-    ImagePlanes *ReadFrame( int num_frame );
-    void ReleaseFrame( int num_frame );
-    void FillBufferUpto( int num_frame );
+    void ReadFrame( int num_frame, uint8_t *frame[] );
     inline int NumberOfFrames() { return istrm_nframes; }
 protected:
+    int LumMean(uint8_t *frame );
+    void ReadChunk();
+    static void *ReadChunksWrapper(void *picread);
+    void ReadChunksWorker();
+    void StartWorker();
     void ReadChunkSequential( int num_frame );
-    void AllocateBufferUpto( int buffer_slot );
-    virtual bool LoadFrame( ImagePlanes &image ) = 0;
+    void ReadChunkParallel( int num_frame );
+    void FillBufferUpto( int num_frame ); // Load frame
+    virtual bool LoadFrame( ) = 0;
     
 protected:
     EncoderParams &encparams;
+	pthread_mutex_t input_imgs_buf_lock;
 
-	int frames_read; 
-    int frames_released;
-    std::deque<ImagePlanes *> input_imgs_buf;
-    std::deque<ImagePlanes *>  unused;
-    int istrm_nframes;      // Number of frames in stream once EOS known,
-                                     // Otherwise INT_MAX
+	pthread_cond_t new_chunk_req;
+	pthread_cond_t new_chunk_ack;
+	pthread_t      worker_thread;
+ 
+   /* NOTE: access to frames_read *must* be read-only in other threads
+	  once the chunk-reading worker thread has been started.
+   */
+
+    
+    int *lum_mean;
+	volatile int frames_read;
+	int last_frame;
+    ImagePlanes *input_imgs_buf;
+    int input_imgs_buf_size;
+    int istrm_nframes;
 };
 
 
