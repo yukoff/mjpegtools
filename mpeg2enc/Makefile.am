@@ -1,90 +1,45 @@
 #
-# Automake Makefile template for mpeg2enc++ library 
-# and mpeg2enc command line wrapper.
-#
+# Automake Makefile template for mpeg2enc...
 
 bin_PROGRAMS = mpeg2enc 
 
-mpeg2encpp_MMXSSE_INLINE = \
-	fdct_x86.c \
-	fdct_mmx.c \
-	idct_mmx.c \
-	quant_mmx.c \
-	predict_mmx.c \
-	predcomp_mmx.c \
-	predcomp_mmxe.c \
-	predict_x86.c \
-	quantize_x86.c \
-	transfrm_x86.c
+mpeg2enc_MMXSSE = \
+    fdct_mmx.s fdctdata.c idct_mmx.s idctdata.c \
+    quant_mmx.s dist2_mmx.s bdist2_mmx.s\
+	bdist1_mmx.s predict_mmx.s \
+	mblockq_sad_mmxe.s mblock_sad_mmxe.s mblock_sad_mmx.s  \
+    mblock_sub44_sads.c \
+	quantize_x86.c  \
+    predcomp_mmxe.s predcomp_mmx.s
 
-EXTRA_DIST = NOTES README TODO INSTALL ChangeLog seqstats.cc seqstats.hh
+EXTRA_DIST = \
+    fdct_mmx.o idct_mmx.o quant_mmx.o dist2_mmx.o bdist2_mmx.o\
+	bdist1_mmx.o predict_mmx.o \
+	mblockq_sad_mmxe.o mblock_sad_mmxe.o mblock_sad_mmx.o \
+    mblock_sub44_sads_x86_h.c \
+	predcomp_mmxe.o predcomp_mmx.o
 
-MAINTAINERCLEANFILES = Makefile.in
+INCLUDES = -I $(top_srcdir) -I $(top_srcdir)/utils
 
-AM_CPPFLAGS = -I$(top_srcdir) -I$(top_srcdir)/utils
+if HAVE_X86CPU
+mpeg2enc_SIMD = $(mpeg2enc_MMXSSE)
+else
+mpeg2enc_SIMD = 
+endif
 
-LIBMJPEGUTILS = $(top_builddir)/utils/libmjpegutils.la
+mpeg2enc_SOURCES = mpeg2enc.c conform.c putseq.c putpic.c puthdr.c putmpg.c \
+	 putvlc.c putbits.c motion.c predict.c readpic.c writepic.c transfrm.c \
+	fdctref.c idct.c quantize.c ratectl.c stats.c cpu_accel.c  synchrolib.c \
+	fastintfns.h  global.h mpeg2enc.h vlc.h cpu_accel.h mmx.h attributes.h \
+	simd.h synchrolib.h $(mpeg2enc_SIMD)
 
-lib_LTLIBRARIES = libmpeg2encpp.la
 
-if HAVE_ASM_MMX
-SIMD_INLINE = $(mpeg2encpp_MMXSSE_INLINE)
-endif # HAVE_ASM_MMX
+mpeg2enc_LDADD= -L $(top_srcdir)/utils -lutils -lm -lpthread
 
-# Reference implementations of lowlevel routines that may have Architecture
-# dependent (usually SIMD) implementations
+ASM = nasm
 
-mpeg2enc_REF = \
-	fdct.c \
-	idct.c \
-	predict_ref.c \
-	quantize_ref.c \
-	transfrm_ref.c
 
-mpeg2enc_noinst_header_REF = \
-	transfrm_ref.h
+.s.o:
+	$(ASM) -o $@ -f elf $<
 
-mpeg2enc_inst_header_REF = \
-	predict_ref.h
 
-mpeg2enc_SOURCES = mpeg2enc.cc
-
-libmpeg2encpp_la_SOURCES = conform.cc elemstrmwriter.cc encoderparams.cc \
-		macroblock.cc motionest.cc mpeg2coder.cc mpeg2encoptions.cc \
-		imageplanes.cc mpeg2encoder.cc \
-		picture.cc picturereader.cc predict.cc putpic.cc \
-		streamstate.cc seqencoder.cc \
-		quantize.cc ratectl.cc stats.cc synchrolib.cc tables.c \
-		transfrm.cc $(mpeg2enc_REF) \
-		$(SIMD_INLINE) ontheflyratectlpass1.cc ontheflyratectlpass2.cc \
-	rate_complexity_model.cc
-
-noinst_HEADERS = channel.hh quantize_precomp.h simd.h \
-	tables.h $(mpeg2enc_noinst_header_REF) rate_complexity_model.hh
-
-libmpeg2encpp_includedir = $(pkgincludedir)/mpeg2enc
-
-libmpeg2encpp_include_HEADERS = elemstrmwriter.hh encoderparams.hh \
-	encodertypes.h macroblock.hh mpeg2coder.hh mpeg2encoder.hh mpeg2encoptions.hh \
-	mpeg2encparams.h picture.hh picturereader.hh quantize.hh quantize_ref.h ratectl.hh \
-	streamstate.h seqencoder.hh synchrolib.h syntaxconsts.h $(mpeg2enc_inst_header_REF) \
-	ontheflyratectlpass1.hh ontheflyratectlpass2.hh \
-	mpeg2syntaxcodes.h imageplanes.hh
-
-libmpeg2encpp_la_LDFLAGS = \
-	${LT_STATIC} \
-	-version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
-	-release $(LT_RELEASE) ${EXTRA_LDFLAGS}
-
-libmpeg2encpp_la_DEPENDENCIES = $(LIBMJPEGUTILS)
-
-libmpeg2encpp_la_LIBADD = $(LIBMJPEGUTILS) @PTHREAD_LIBS@
-
-mpeg2enc_DEPENDENCIES = \
-	$(LIBMJPEGUTILS) \
-	libmpeg2encpp.la
-
-mpeg2enc_LDADD = \
-	libmpeg2encpp.la \
-	$(LIBMJPEGUTILS) \
-	@PTHREAD_LIBS@ @LIBGETOPT_LIB@ $(LIBM_LIBS)
