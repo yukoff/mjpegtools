@@ -56,7 +56,7 @@
 #include "simd.h"
 
 
-#if defined(HAVE_ASM_MMX)
+#if defined(HAVE_ASM_MMX) && defined(HAVE_ASM_NASM) 
 extern void init_x86_predict(uint32_t cpucap);
 #endif
 
@@ -230,15 +230,20 @@ void init_predict(void)
 {
 	int cpucap = cpu_accel();
 
-    /* Default to reference implementation ... */
-    ppred_comp = pred_comp;
+	if( cpucap  == 0 )	/* No MMX/SSE etc support available */
+	{
+		ppred_comp = pred_comp;
+	}
 
-    if ( cpucap != 0 )
+#if defined(HAVE_ASM_MMX) && defined(HAVE_ASM_NASM) 
+    else
     {
-#if defined(HAVE_ASM_MMX) 
         init_x86_predict(cpucap);
+    }
 #endif
 #ifdef HAVE_ALTIVEC
+    else
+	{
 #  if ALTIVEC_TEST_PREDICT
 #    if defined(ALTIVEC_BENCHMARK)
 	    mjpeg_info("SETTING AltiVec BENCHMARK for PREDICTION!");
@@ -254,9 +259,8 @@ void init_predict(void)
 #  else
 	    ppred_comp = ALTIVEC_SUFFIX(pred_comp);
 #  endif
+	}
 #endif /* HAVE_ALTIVEC */
-    }
-
 }
 
 
