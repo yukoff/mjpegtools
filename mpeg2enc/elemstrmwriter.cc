@@ -1,4 +1,4 @@
-/* ElemStrmFragBuf.cc -  bit-level output of MPEG-1/2 elementary video stream */
+/* elemstrmwriter.cc -  bit-level output of MPEG-1/2 elementary video stream */
 
 /* Copyright (C) 1996, MPEG Software Simulation Group. All Rights Reserved. */
 
@@ -49,73 +49,63 @@
 #include "elemstrmwriter.hh"
 #include "mpeg2encoder.hh"
 #include <cassert>
+#include <stdio.h>
 #include <string.h>
 
-ElemStrmWriter::ElemStrmWriter() 
+ElemStrmWriter::ElemStrmWriter(EncoderParams &_encparams ) :
+	encparams( _encparams )
 {
-    flushed = BITCOUNT_OFFSET/8;
+	serial_id = 1;
+	last_flushed_serial_id = 0;
+	outcnt = 8;
+	bytecnt = BITCOUNT_OFFSET/8LL;
+	buffer_size = 1024*128;
+
+	buffer = NULL;
+	ExpandBuffer();
 }
+
 
 ElemStrmWriter::~ElemStrmWriter()
-{
-}
-
-/* *********************************************************************** */
-
-
-OutputFragBuf::OutputFragBuf()
-{
-    pendingbits = 0;
-    unflushed = 0;
-    outcnt = 8;
-}
-
-OutputFragBuf::~OutputFragBuf()
-{
-}
-
-
-/* *********************************************************************** */
-
-
-ElemStrmFragBuf::ElemStrmFragBuf(ElemStrmWriter &_writer ) :
-	OutputFragBuf(),
-    writer(_writer)
-{
-    buffer = NULL;
-    ResetBuffer();
-}
-
-ElemStrmFragBuf::~ElemStrmFragBuf()
 {
 	free( buffer );
 }
 
-void ElemStrmFragBuf::AdjustBuffer()
+void ElemStrmWriter::ExpandBuffer()
 {
 	buffer_size *= 2;
-	buffer = static_cast<uint8_t *>(realloc( buffer, sizeof(uint8_t) * buffer_size));
+	buffer = static_cast<uint8_t *>(realloc( buffer, sizeof(uint8_t[buffer_size])));
 	if( !buffer )
 		mjpeg_error_exit1( "output buffer memory allocation: out of memory" );
 }
 
-
-void ElemStrmFragBuf::ResetBuffer()
-{
-    outcnt = 8;
-    buffer_size = 1024*16;
-    unflushed = 0;
-    AdjustBuffer();
-}
-
-void ElemStrmFragBuf::FlushBuffer( )
+ElemStrmBufferState	ElemStrmWriter::CurrentState()
 {
 	assert( outcnt == 8 );
-	writer.WriteOutBufferUpto( buffer, unflushed );
-    ResetBuffer();
+	++serial_id;
+	return static_cast<ElemStrmBufferState>(*this);
 }
 
+void ElemStrmWriter::FlushBuffer( )
+{
+	assert( outcnt == 8 );
+	WriteOutBufferUpto( unflushed );
+	unflushed = 0;
+	++serial_id;
+	last_flushed_serial_id = serial_id;
+}
 
+void ElemStrmWriter::RestoreState( const ElemStrmBufferState &restore )
+{
+	assert( restore.serial_id > last_flushed_serial_id );
+	*static_cast<ElemStrmBufferState *>(this) = restore;
+}
+
+void ElemStrmWriter::AlignBits()
+{
+	if (outcnt!=8)
+		PutBits(0,outcnt);
+}
 
 /**************
  *
@@ -123,18 +113,19 @@ void ElemStrmFragBuf::FlushBuffer( )
  *
  *************/
 
-void ElemStrmFragBuf::PutBits(uint32_t val, int n)
+void ElemStrmWriter::PutBits(uint32_t val, int n)
 {
 	val = (n == 32) ? val : (val & (~(0xffffffffU << n)));
 	while( n >= outcnt )
 	{
 		pendingbits = (pendingbits << outcnt ) | (val >> (n-outcnt));
 		if( unflushed == buffer_size )
-			AdjustBuffer();
+			ExpandBuffer();
 		buffer[unflushed] = pendingbits;
 		++unflushed;
 		n -= outcnt;
 		outcnt = 8;
+		++bytecnt;
 	}
 	if( n != 0 )
 	{
@@ -144,52 +135,31 @@ void ElemStrmFragBuf::PutBits(uint32_t val, int n)
 }
 
 
-/* *********************************************************************** */
 
-
-CountOnlyFragBuf::CountOnlyFragBuf() :
-	OutputFragBuf()
+FILE_StrmWriter::FILE_StrmWriter( EncoderParams &encparams, const char *outfilename ) :
+	ElemStrmWriter( encparams )
 {
+	/* open output file */
+	if (!(outfile=fopen(outfilename,"wb")))
+	{
+		mjpeg_error_exit1("Couldn't create output file %s",outfilename);
+	}
 }
 
-CountOnlyFragBuf::~CountOnlyFragBuf()
+void FILE_StrmWriter::WriteOutBufferUpto( const size_t flush_upto )
 {
-
+	size_t written = fwrite( buffer, 
+							 sizeof(uint8_t), flush_upto,
+							 outfile );
+	if( written != flush_upto )
+	{
+		mjpeg_error_exit1( strerror(ferror(outfile)) );
+	}
+	
 }
 
-void CountOnlyFragBuf::ResetBuffer()
+FILE_StrmWriter::~FILE_StrmWriter()
 {
-    outcnt = 8;
-    unflushed = 0;
+	fclose( outfile );
 }
 
-void CountOnlyFragBuf::FlushBuffer( )
-{
-    unflushed = 0;
-}
-
-/**************
- *
- * Write least significant n (0<=n<=32) bits of val to output buffer
- *
- *************/
-
-void CountOnlyFragBuf::PutBits(uint32_t val, int n)
-{
-	int bits = (8-outcnt)+n;
-	int bytes = bits / 8;
-	int remainder = bits % 8;
-	unflushed += bytes;
-	outcnt = 8-remainder;
-}
-
-
-
-
-/* 
- * Local variables:
- *  c-file-style: "stroustrup"
- *  tab-width: 4
- *  indent-tabs-mode: nil
- * End:
- */

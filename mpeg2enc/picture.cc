@@ -45,10 +45,7 @@
  */
 
 #include "config.h"
-#include <cassert>
-#include <math.h>
 #include "mjpeg_types.h"
-#include "mjpeg_logging.h"
 #include "mpeg2syntaxcodes.h"
 #include "cpu_accel.h"
 #include "motionsearch.h"
@@ -56,17 +53,14 @@
 #include "mpeg2coder.hh"
 #include "quantize.hh"
 #include "seqencoder.hh"
-#include "ratectl.hh"
 #include "tables.h"
-#include "imageplanes.hh"
-
 
 Picture::Picture( EncoderParams &_encparams, 
-                  ElemStrmWriter &writer, 
+                  MPEG2Coder &_coder, 
                   Quantizer &_quantizer ) :
     encparams( _encparams ),
-    quantizer( _quantizer ),
-    coding( new MPEG2CodingBuf( _encparams, writer) )
+    coder( _coder ),
+    quantizer( _quantizer )
 {
 	int i,j;
 	/* Allocate buffers for picture transformation */
@@ -89,29 +83,36 @@ Picture::Picture( EncoderParams &_encparams,
     }
 
 
-    rec_img = new ImagePlanes( encparams );
-    pred   = new ImagePlanes( encparams );
+	curref = new (uint8_t *)[5];
+	curorg = new (uint8_t *)[5];
+	pred   = new (uint8_t *)[5];
 
-    // Initialise the reference image pointers to NULL to ensure errors show
-    org_img = 0;
-    fwd_rec = fwd_org = 0;
-    bwd_rec = bwd_org = 0;
+	for( i = 0 ; i<3; i++)
+	{
+		int size =  (i==0) ? encparams.lum_buffer_size : encparams.chrom_buffer_size;
+		curref[i] = static_cast<uint8_t *>(bufalloc(size));
+		curorg[i] = NULL;       // Will point to input frame data buffered by
+                                // PictureReader
+		pred[i]   = static_cast<uint8_t *>(bufalloc(size));
+	}
 
-    // This is really just a dummy for the non 0xffff case.  Its ignored by decodes
-    // anyhow (completely useless piece of information - only a Committee creation
-    // like MPEG could have included it).
-	if( !encparams.mpeg1 || encparams.quant_floor != 0 || encparams.still_size > 0)
-		vbv_delay =  FFFF_VBV_DELAY;
-	else if( encparams.still_size > 0 )
-		vbv_delay =  static_cast<int>(90000.0/encparams.frame_rate/4);
+	/* The (non-existent) previous encoding using an as-yet un-used
+	   picture encoding data buffers is "completed"
+	*/
+	sync_guard_init( &completion, 1 );
 }
-
 
 Picture::~Picture()
 {
-    delete rec_img;
+    int i;
+	for( i = 0 ; i<3; i++)
+	{
+		free( curref[i] );
+		free( pred[i] );
+	}
+    delete curref;
+    delete curorg;
     delete pred;
-    delete coding;
 }
 
 /*
@@ -138,163 +139,100 @@ void Picture::Reconstruct()
 #endif
 }
 
-/*******************************************
- *
- * Set picture encoding parameters that depend
- * on the frame being encoded.
- *
- ******************************************/
-
-void Picture::SetFrameParams( const StreamState &ss, int field )
+void Picture::SetSeqPos(int _decode,int b_index )
 {
-    new_seq = ss.new_seq;
-    end_seq = ss.end_seq;
-    gop_decode = ss.g_idx;
-    bgrp_decode = ss.b_idx;
-    decode = ss.DecodeNum();
-    present = ss.PresentationNum();
-    temp_ref = ss.TemporalReference();
-    last_picture = ss.EndOfStream();
-    nb = ss.nb;
-    np = ss.np;
-    closed_gop = ss.closed_gop;
-    dc_prec = encparams.dc_prec;
-    SetFieldParams( field );
-}
+	decode = _decode;
+	dc_prec = encparams.dc_prec;
+	secondfield = false;
+	ipflag = 0;
+
+		
+	/* Handle picture structure... */
+	if( encparams.fieldpic )
+	{
+		pict_struct = encparams.topfirst ? TOP_FIELD : BOTTOM_FIELD;
+		topfirst = 0;
+		repeatfirst = 0;
+	}
+
+	/* Handle 3:2 pulldown frame pictures */
+	else if( encparams.pulldown_32 )
+	{
+		pict_struct = FRAME_PICTURE;
+		switch( present % 4 )
+		{
+		case 0 :
+			repeatfirst = 1;
+			topfirst = encparams.topfirst;			
+			break;
+		case 1 :
+			repeatfirst = 0;
+			topfirst = !encparams.topfirst;
+			break;
+		case 2 :
+			repeatfirst = 1;
+			topfirst = !encparams.topfirst;
+			break;
+		case 3 :
+			repeatfirst = 0;
+			topfirst = encparams.topfirst;
+			break;
+		}
+	}
+	
+	/* Handle ordinary frame pictures */
+	else
+
+	{
+		pict_struct = FRAME_PICTURE;
+		repeatfirst = 0;
+		topfirst = encparams.topfirst;
+	}
 
 
+	switch ( pict_type )
+	{
+	case I_TYPE :
+		forw_hor_f_code = 15;
+		forw_vert_f_code = 15;
+		back_hor_f_code = 15;
+		back_vert_f_code = 15;
+		sxf = encparams.motion_data[0].sxf;
+		syf = encparams.motion_data[0].syf;
+		break;
+	case P_TYPE :
+		forw_hor_f_code = encparams.motion_data[0].forw_hor_f_code;
+		forw_vert_f_code = encparams.motion_data[0].forw_vert_f_code;
+		back_hor_f_code = 15;
+		back_vert_f_code = 15;
+		sxf = encparams.motion_data[0].sxf;
+		syf = encparams.motion_data[0].syf;
+		break;
+	case B_TYPE :
+		forw_hor_f_code = encparams.motion_data[b_index].forw_hor_f_code;
+		forw_vert_f_code = encparams.motion_data[b_index].forw_vert_f_code;
+		back_hor_f_code = encparams.motion_data[b_index].back_hor_f_code;
+		back_vert_f_code = encparams.motion_data[b_index].back_vert_f_code;
+		sxf = encparams.motion_data[b_index].sxf;
+		syf = encparams.motion_data[b_index].syf;
+		sxb = encparams.motion_data[b_index].sxb;
+		syb = encparams.motion_data[b_index].syb;
 
-/************************************************************************
- *
- * Set encoding parameters that depend on which field of a frame
- * is being encoded.
- *
- ************************************************************************/
+		break;
+	}
 
-
-void Picture::SetFieldParams(int field)
-{
-    secondfield = (field == 1);
-
-    if( bgrp_decode == 0 )             // Start of a B-group: I or P frame
-    {
-        if (gop_decode==0 ) /* first encoded frame in GOP is I */
-        {
-            if( field == 0)
-            {
-                gop_start = true;
-                ipflag = 0;
-                pict_type = I_TYPE;
-                if( encparams.fieldpic )
-                  end_seq = false;
-
-            }
-            else // P field of I-frame
-            {
-                gop_start = false;
-                ipflag = 1;
-                pict_type = P_TYPE;
-                new_seq = false;
-            }
-        }
-        else 
-        {
-            pict_type = P_TYPE;
-            gop_start = false;
-            closed_gop = false;
-            new_seq = false;
-        }
-    }
-    else
-    {
-        closed_gop = false;
-        pict_type = B_TYPE;
-        gop_start = false;
-        new_seq = false;
-    }
-
-    
-    finalfield = !encparams.fieldpic || field == 1;
-
-    /* Handle picture structure... */
-    if( encparams.fieldpic )
-    {
-        /* ... when field encoding */
-        pict_struct = ((encparams.topfirst) ^ (field == 1)) ? TOP_FIELD : BOTTOM_FIELD;
-        topfirst = 0;
-        repeatfirst = 0;
-    }
-    else if( encparams.pulldown_32 )
-    {
-        /* ... when encoding 3:2 pulldown frame pictures */
-        pict_struct = FRAME_PICTURE;
-        switch( present % 4 )
-        {
-            case 0 :
-                repeatfirst = 1;
-                topfirst = encparams.topfirst;          
-                break;
-            case 1 :
-                repeatfirst = 0;
-                topfirst = !encparams.topfirst;
-                break;
-            case 2 :
-                repeatfirst = 1;
-                topfirst = !encparams.topfirst;
-                break;
-            case 3 :
-                repeatfirst = 0;
-                topfirst = encparams.topfirst;
-                break;
-        }
-    }
-    else
-    {
-        /* .. when encoding ordinary frame pictures */
-        pict_struct = FRAME_PICTURE;
-        repeatfirst = 0;
-        topfirst = encparams.topfirst;
-    }
-
-    forw_hor_f_code = encparams.motion_data[bgrp_decode].forw_hor_f_code;
-    forw_vert_f_code = encparams.motion_data[bgrp_decode].forw_vert_f_code;
-    sxf = encparams.motion_data[bgrp_decode].sxf;
-    syf = encparams.motion_data[bgrp_decode].syf;
-
-    switch ( pict_type )
-    {
-        case I_TYPE :
-            forw_hor_f_code = 15;
-            forw_vert_f_code = 15;
-            back_hor_f_code = 15;
-            back_vert_f_code = 15;
-            break;
-        case P_TYPE :
-            back_hor_f_code = 15;
-            back_vert_f_code = 15;
-            break;
-        case B_TYPE :
-            back_hor_f_code = encparams.motion_data[bgrp_decode].back_hor_f_code;
-            back_vert_f_code = encparams.motion_data[bgrp_decode].back_vert_f_code;
-            sxb = encparams.motion_data[bgrp_decode].sxb;
-            syb = encparams.motion_data[bgrp_decode].syb;
-            break;
-        default:
-            abort();
-    }
-
-    /* We currently don't support frame-only DCT/Motion Est.  for non
-    progressive frames */
-    prog_frame = encparams.frame_pred_dct_tab[pict_type-1];
-    frame_pred_dct = encparams.frame_pred_dct_tab[pict_type-1];
-    q_scale_type = encparams.qscale_tab[pict_type-1];
-    intravlc = encparams.intravlc_tab[pict_type-1];
-    altscan = encparams.altscan_tab[pict_type-1];
+	/* We currently don't support frame-only DCT/Motion Est.  for non
+	   progressive frames */
+	prog_frame = encparams.frame_pred_dct_tab[pict_type-1];
+	frame_pred_dct = encparams.frame_pred_dct_tab[pict_type-1];
+	q_scale_type = encparams.qscale_tab[pict_type-1];
+	intravlc = encparams.intravlc_tab[pict_type-1];
+	altscan = encparams.altscan_tab[pict_type-1];
     scan_pattern = (altscan ? alternate_scan : zig_zag_scan);
 
     /* If we're using B frames then we reserve unit coefficient
-    dropping for them as B frames have no 'knock on' information
-    loss */
+       dropping for them as B frames have no 'knock on' information
+       loss */
     if( pict_type == B_TYPE || encparams.M == 1 )
     {
         unit_coeff_threshold = abs( encparams.unit_coeff_elim );
@@ -305,13 +243,145 @@ void Picture::SetFieldParams(int field)
         unit_coeff_threshold = 0;
         unit_coeff_first = 0;
     }
+        
+
+#ifdef OUTPUT_STAT
+	fprintf(statfile,"\nFrame %d (#%d in display order):\n",decode,display);
+	fprintf(statfile," picture_type=%c\n",pict_type_char[pict_type]);
+	fprintf(statfile," temporal_reference=%d\n",temp_ref);
+	fprintf(statfile," frame_pred_frame_dct=%d\n",frame_pred_dct);
+	fprintf(statfile," q_scale_type=%d\n",q_scale_type);
+	fprintf(statfile," intra_vlc_format=%d\n",intravlc);
+	fprintf(statfile," alternate_scan=%d\n",altscan);
+
+	if (pict_type!=I_TYPE)
+	{
+		fprintf(statfile," forward search window: %d...%d / %d...%d\n",
+				-sxf,sxf,-syf,syf);
+		fprintf(statfile," forward vector range: %d...%d.5 / %d...%d.5\n",
+				-(4<<forw_hor_f_code),(4<<forw_hor_f_code)-1,
+				-(4<<forw_vert_f_code),(4<<forw_vert_f_code)-1);
+	}
+
+	if (pict_type==B_TYPE)
+	{
+		fprintf(statfile," backward search window: %d...%d / %d...%d\n",
+				-sxb,sxb,-syb,syb);
+		fprintf(statfile," backward vector range: %d...%d.5 / %d...%d.5\n",
+				-(4<<back_hor_f_code),(4<<back_hor_f_code)-1,
+				-(4<<back_vert_f_code),(4<<back_vert_f_code)-1);
+	}
+#endif
 
 
+}
 
-    
+/*
+ * Adjust picture parameters for the second field in a pair of field
+ * pictures.
+ *
+ */
+
+void Picture::Set2ndField()
+{
+	secondfield = true;
+    gop_start = false;
+	if( pict_struct == TOP_FIELD )
+		pict_struct =  BOTTOM_FIELD;
+	else
+		pict_struct =  TOP_FIELD;
+	
+	if( pict_type == I_TYPE )
+	{
+		ipflag = 1;
+		pict_type = P_TYPE;
+		
+		forw_hor_f_code = encparams.motion_data[0].forw_hor_f_code;
+		forw_vert_f_code = encparams.motion_data[0].forw_vert_f_code;
+		back_hor_f_code = 15;
+		back_vert_f_code = 15;
+		sxf = encparams.motion_data[0].sxf;
+		syf = encparams.motion_data[0].syf;	
+	}
 }
 
 
+
+
+/* Set the sequencing structure information
+   of a picture (type and temporal reference)
+   based on the specified sequence state
+*/
+
+void Picture::Set_IP_Frame( StreamState *ss, int num_frames )
+{
+	/* Temp ref of I frame in closed GOP of sequence is 0 We have to
+	   be a little careful with the end of stream special-case.
+	*/
+	if( ss->g == 0 && ss->closed_gop )
+	{
+		temp_ref = 0;
+	}
+	else 
+	{
+		temp_ref = ss->g+(ss->bigrp_length-1);
+	}
+
+	if (temp_ref >= (num_frames-ss->gop_start_frame))
+		temp_ref = (num_frames-ss->gop_start_frame) - 1;
+
+	present = (ss->i-ss->g)+temp_ref;
+	if (ss->g==0) /* first displayed frame in GOP is I */
+	{
+		pict_type = I_TYPE;
+	}
+	else 
+	{
+		pict_type = P_TYPE;
+	}
+
+	/* Start of GOP - set GOP data for picture */
+	if( ss->g == 0 )
+	{
+		gop_start = true;
+        closed_gop = ss->closed_gop;
+		new_seq = ss->new_seq;
+		nb = ss->nb;
+		np = ss->np;
+	}		
+	else
+	{
+		gop_start = false;
+        closed_gop = false;
+		new_seq = false;
+	}
+}
+
+
+void Picture::Set_B_Frame(  StreamState *ss )
+{
+	temp_ref = ss->g - 1;
+	present = ss->i-1;
+	pict_type = B_TYPE;
+	gop_start = false;
+	new_seq = false;
+}
+
+
+
+void Picture::EncodeMacroBlocks()
+{ 
+    vector<MacroBlock>::iterator mbi = mbinfo.begin();
+
+	for( mbi = mbinfo.begin(); mbi < mbinfo.end(); ++mbi)
+	{
+        mbi->MotionEstimate();
+        mbi->SelectCodingModeOnVariance();
+        mbi->Predict();
+        mbi->Transform();
+	}
+
+}
 
 void Picture::IQuantize()
 {
@@ -322,94 +392,65 @@ void Picture::IQuantize()
 	}
 }
 
-
-double Picture::VarSumBestMotionComp()
+void Picture::ActivityMeasures( double &act_sum, double &var_sum)
 {
-    double var_sum = 0.0;
-    vector<MacroBlock>::iterator i;
-    for( i = mbinfo.begin(); i < mbinfo.end(); ++i )
-    {
-        var_sum += i->best_me->var;
-    }
-    return var_sum;
-}
-
-double Picture::MinVarBestMotionComp()
-{
-    double min_var = 1.0e26;
-    vector<MacroBlock>::iterator i;
-    for( i = mbinfo.begin(); i < mbinfo.end(); ++i )
-    {
-        min_var = fmin( min_var,
-                        static_cast<double>(i->best_me->var) );
-    }
-    return min_var;
-}
-
-double Picture::VarSumBestFwdMotionComp()
-{
-    double var_sum = 0.0;
-    vector<MacroBlock>::iterator i;
-    for( i = mbinfo.begin(); i < mbinfo.end(); ++i )
-    {
-        var_sum += i->best_fwd_me->var;
-    }
-    return var_sum;
-}
-
-double Picture::ActivityBestMotionComp()
-{
+	int i,j,k,l;
 	double actj,sum;
+	double varsum;
 	int blksum;
 	sum = 0.0;
-    vector<MacroBlock>::iterator i;
-    for (i = mbinfo.begin(); i < mbinfo.end(); ++i )
-    {
-        /* A.Stevens Jul 2000 Luminance variance *has* to be a
-           rotten measure of how active a block in terms of bits
-           needed to code a lossless DCT.  E.g. a half-white
-           half-black block has a maximal variance but pretty
-           small DCT coefficients.
+	varsum = 0.0;
+	k = 0;
+	for (j=0; j<encparams.enc_height2; j+=16)
+		for (i=0; i<encparams.enc_width; i+=16)
+		{
+			/* A.Stevens Jul 2000 Luminance variance *has* to be a
+			   rotten measure of how active a block in terms of bits
+			   needed to code a lossless DCT.  E.g. a half-white
+			   half-black block has a maximal variance but pretty
+			   small DCT coefficients.
 
-           So.... instead of luminance variance as used in the
-           original we use the absolute sum of DCT coefficients as
-           our block activity measure.  */
+			   So.... instead of luminance variance as used in the
+			   original we use the absolute sum of DCT coefficients as
+			   our block activity measure.  */
 
-        if( i->best_me->mb_type  & MB_INTRA )
-        {
-            /* Compensate for the wholly disproprotionate weight
-             of the DC coefficients.  Shold produce more sensible
-             results...  yes... it *is* an mostly empirically derived
-             fudge factor ;-)
-            */
-            blksum =  -80*COEFFSUM_SCALE;
-            for( int l = 0; l < 6; ++l )
-                blksum += 
-                    quantizer.WeightCoeffIntra( i->RawDCTblocks()[l] ) ;
-        }
-        else
-        {
-            blksum = 0;
-            for( int l = 0; l < 6; ++l )
-                blksum += 
-                    quantizer.WeightCoeffInter( i->RawDCTblocks()[l] ) ;
-        }
-        /* It takes some bits to code even an entirely zero block...
-           It also makes a lot of calculations a lot better conditioned
-           if it can be guaranteed that activity is always distinctly
-           non-zero.
-         */
+			varsum += (double)mbinfo[k].final_me.var;
+			if( mbinfo[k].final_me.mb_type  & MB_INTRA )
+			{
+				/* Compensate for the wholly disproprotionate weight
+				 of the DC coefficients.  Shold produce more sensible
+				 results...  yes... it *is* an mostly empirically derived
+				 fudge factor ;-)
+				*/
+				blksum =  -80*COEFFSUM_SCALE;
+				for( l = 0; l < 6; ++l )
+					blksum += 
+						quantizer.WeightCoeffIntra( mbinfo[k].RawDCTblocks()[l] ) ;
+			}
+			else
+			{
+				blksum = 0;
+				for( l = 0; l < 6; ++l )
+					blksum += 
+						quantizer.WeightCoeffInter( mbinfo[k].RawDCTblocks()[l] ) ;
+			}
+			/* It takes some bits to code even an entirely zero block...
+			   It also makes a lot of calculations a lot better conditioned
+			   if it can be guaranteed that activity is always distinctly
+			   non-zero.
+			 */
 
 
-        actj = (double)blksum / (double)COEFFSUM_SCALE;
-        if( actj < 12.0 )
-            actj = 12.0;
+			actj = (double)blksum / (double)COEFFSUM_SCALE;
+			if( actj < 12.0 )
+				actj = 12.0;
 
-        i->act = actj;
-        sum += actj;
-    }
-    return sum;
-
+			mbinfo[k].act = (double)actj;
+			sum += (double)actj;
+			++k;
+		}
+	act_sum = sum;
+	var_sum = varsum;
 }
 
 /* inverse transform prediction error and add prediction */
@@ -442,321 +483,12 @@ void Picture::MotionSubSampledLum( )
 		linestride = 2*eparams.phy_width;
 	}
 
-    uint8_t *org_Y = org_img->Plane(0);
-    psubsample_image( org_Y, 
-                                 linestride,
-                                 org_Y+eparams.fsubsample_offset, 
-                                 org_Y+eparams.qsubsample_offset );
+	psubsample_image( curorg[0], 
+					 linestride,
+					 curorg[0]+eparams.fsubsample_offset, 
+					 curorg[0]+eparams.qsubsample_offset );
 }
 
-
-//
-// TODO Coders internal state (.e.g prev_mb) should be taken out of Picture object state
-//
-
-bool Picture::SkippableMotionMode( MotionEst &cur_mb_mm, MotionEst &prev_mb_mm)
-{
-
-    if (pict_type==P_TYPE && !(cur_mb_mm.mb_type&MB_FORWARD))
-    {
-        /* P picture, no motion vectors -> skipable */
-        return true;
-    }
-    else if(pict_type==B_TYPE )
-    {
-        /* B frame picture with same prediction type
-         * (forward/backward/interp.)  and same active vectors
-         * as in previous macroblock -> skippable
-         */
-
-        if (  pict_struct==FRAME_PICTURE
-              && cur_mb_mm.motion_type==MC_FRAME
-              && ((prev_mb_mm.mb_type ^ cur_mb_mm.mb_type) &(MB_FORWARD|MB_BACKWARD))==0
-              && (!(cur_mb_mm.mb_type&MB_FORWARD) ||
-                  (PMV[0][0][0]==cur_mb_mm.MV[0][0][0] &&
-                   PMV[0][0][1]==cur_mb_mm.MV[0][0][1]))
-              && (!(cur_mb_mm.mb_type&MB_BACKWARD) ||
-                  (PMV[0][1][0]==cur_mb_mm.MV[0][1][0] &&
-                   PMV[0][1][1]==cur_mb_mm.MV[0][1][1])))
-        {
-            return true;
-        }
-
-        /* B field picture macroblock with same prediction
-         * type (forward/backward/interp.) and active
-         * vectors as previous macroblock and same
-         * vertical field selects as current field -> skippable
-         */
-
-        if (pict_struct!=FRAME_PICTURE
-            && cur_mb_mm.motion_type==MC_FIELD
-            && ((prev_mb_mm.mb_type^cur_mb_mm.mb_type)&(MB_FORWARD|MB_BACKWARD))==0
-            && (!(cur_mb_mm.mb_type&MB_FORWARD) ||
-                (PMV[0][0][0]==cur_mb_mm.MV[0][0][0] &&
-                 PMV[0][0][1]==cur_mb_mm.MV[0][0][1] &&
-                 cur_mb_mm.field_sel[0][0]==(pict_struct==BOTTOM_FIELD)))
-            && (!(cur_mb_mm.mb_type&MB_BACKWARD) ||
-                (PMV[0][1][0]==cur_mb_mm.MV[0][1][0] &&
-                 PMV[0][1][1]==cur_mb_mm.MV[0][1][1] &&
-                 cur_mb_mm.field_sel[0][1]==(pict_struct==BOTTOM_FIELD))))
-        {
-            return true;
-        }
-    }
-
-    return false;
-
-}
-
-
-/* ************************************************
- *
- * QuantiseAndEncode - Quantise and Encode a picture.
- *
- * NOTE: It may seem perverse to quantise at the same time as
- * coding-> However, actually makes (limited) sense
- * - feedback from the *actual* bit-allocation may be used to adjust 
- * quantisation "on the fly". This is good for fast 1-pass no-look-ahead coding->
- * - The coded result is in any even only buffered not actually written
- * out. We can back off and try again with a different quantisation
- * easily.
- * - The alternative is calculating size and generating actual codes seperately.
- * The poorer cache coherence of this latter probably makes the performance gain
- * modest.
- *
- * *********************************************** */
-
-void Picture::QuantiseAndCode(RateCtl &ratectl)
-{
-    /* Now the actual quantisation and encoding->.. */
- 
-    int i, j, k;
-    int MBAinc;
-    MacroBlock *cur_mb = 0;
-	int mquant_pred = ratectl.InitialMacroBlockQuant();
-
-	k = 0;
-    
-    /* TODO: We're currently hard-wiring each macroblock row as a
-       slice.  For MPEG-2 we could do this better and reduce slice
-       start code coverhead... */
-
-	for (j=0; j<encparams.mb_height2; j++)
-	{
-        PutSliceHdr(j, mquant_pred);
-        Reset_DC_DCT_Pred();
-        Reset_MV_Pred();
-
-        MBAinc = 1; /* first MBAinc denotes absolute position */
-
-        /* Slice of macroblocks... */
-		for (i=0; i<encparams.mb_width; i++)
-		{
-            prev_mb = cur_mb;
-			cur_mb = &mbinfo[k];
-
-            int suggested_mquant = ratectl.MacroBlockQuant( *cur_mb );
-            cur_mb->mquant = suggested_mquant;
-
-			/* Quantize macroblock : N.b. cbp is also set as side-effect of call. */
-            cur_mb->Quantize( quantizer);
-
-            /*
-             * Macroblocks that don't end or begin a slice, don't have a coded DCT block and
-             * whose motion compensation is predicted and doesn't need coding can be skipped.
-             *
-             */
-
-
-            if( i!=0 && i!=encparams.mb_width-1 && !cur_mb->cbp
-                && SkippableMotionMode( *cur_mb->best_me, *prev_mb->best_me ) )
-            {
-                ++MBAinc;
-                if( pict_type == P_TYPE )
-                {
-                    /* reset predictors */
-                    Reset_DC_DCT_Pred();
-                    Reset_MV_Pred();
-                }
-            }
-            else
-            {
-                int mb_type = cur_mb->best_me->mb_type;
-
-                /* Code mquant and update prediction if it changed in this macroblock */
-                if( cur_mb->cbp && cur_mb->mquant != mquant_pred )
-                {
-                    mquant_pred = cur_mb->mquant;
-                    mb_type |= MB_QUANT;
-                }
-
-                /* Inter-coded MB with some coded DCT blocks ===> PATTERN to code */
-                if ( cur_mb->cbp && !(mb_type & MB_INTRA) )
-                    mb_type|= MB_PATTERN;
-                /* For P frames there's no VLC for 'No MC, Not Coded':
-                * we have to transmit (0,0) motion vectors
-                */
-                if ( pict_type==P_TYPE && !cur_mb->cbp)
-                    mb_type|= MB_FORWARD;
-                coding->PutAddrInc(MBAinc); /* macroblock_address_increment */
-                MBAinc = 1;
-                
-                coding->PutMBType(pict_type,mb_type); /* macroblock type */
-
-                if ( (mb_type & (MB_FORWARD|MB_BACKWARD)) && !frame_pred_dct)
-                    coding->PutBits(cur_mb->best_me->motion_type,2);
-
-                if (pict_struct==FRAME_PICTURE 	&& cur_mb->cbp && !frame_pred_dct)
-                    coding->PutBits(cur_mb->field_dct,1);
-
-                if (mb_type & MB_QUANT)
-                {
-                    coding->PutBits(q_scale_type 
-                            ? map_non_linear_mquant[cur_mb->mquant]
-                            : cur_mb->mquant>>1,5);
-                }
-
-
-
-                if (mb_type & MB_FORWARD)
-                {
-                    /* forward motion vectors, update predictors */
-                    PutMVs( *cur_mb->best_me, false );
-                }
-
-                if (mb_type & MB_BACKWARD)
-                {
-                    /* backward motion vectors, update predictors */
-                    PutMVs( *cur_mb->best_me,  true );
-                }
-
-                if (mb_type & MB_PATTERN)
-                {
-                    coding->PutCPB((cur_mb->cbp >> (BLOCK_COUNT-6)) & 63);
-                }
-            
-                /* Output VLC DCT Blocks for Macroblock */
-
-                PutDCTBlocks( *cur_mb, mb_type );
-                /* reset predictors */
-                if (!(mb_type & MB_INTRA))
-                    Reset_DC_DCT_Pred();
-
-                if (mb_type & MB_INTRA || (pict_type==P_TYPE && !(mb_type & MB_FORWARD)))
-                {
-                    Reset_MV_Pred();
-                }
-            }
-            ++k;
-        } /* Slice MB loop */
-    } /* Slice loop */
-
-}
-
-
-
-/* **********************************
- * 
- * PutHeaders - Put sequence of headers and user data elements that 'belong'
- * to this frame.  We count sequence and GOP headers as belong to the first
- * following picture.
- * 
- * ********************************/
- 
-void Picture::PutHeaders()
-{
-    /* Sequence header if new sequence or we're generating for a
-       format like (S)VCD that mandates sequence headers every GOP to
-       do fast forward, rewind etc.
-    */
-    if( new_seq || decode == 0 || (gop_start && encparams.seq_hdr_every_gop) )
-    {
-      coding->PutSeqHdr();
-    }
-   
-    if( gop_start )
-    {
-      coding->PutGopHdr( decode,  closed_gop );
-    }
-    
-    /* picture header and picture coding extension */
-    PutHeader();
-
-   if( encparams.svcd_scan_data && pict_type == I_TYPE )
-   {
-      coding->PutUserData( dummy_svcd_scan_data, sizeof(dummy_svcd_scan_data) );
-   }
-}
-
-/* **********************************
- * 
- * PutHeaders - Put padding and sequence ending markers that 'belong' to this picture.
- * 
- * ********************************/
- 
-
-void Picture::PutTrailers( int padding_needed )
-{
-	coding->AlignBits();
-    if( padding_needed > 0 )
-    {
-        mjpeg_debug( "Padding coded picture to size: %d extra bytes",
-                     padding_needed );
-        for( int i = 0; i < padding_needed; ++i )
-        {
-            coding->PutBits(0, 8);
-        }
-    }
-
-    /* Handle splitting of output stream into sequences of desired size */
-    if( end_seq )
-    {
-        coding->PutSeqEnd();
-    }
-}
-
-
-
-int Picture::EncodedSize() const
-{ 
-    return coding->ByteCount() * 8; 
-}
-
-double Picture::IntraCodedBlocks() const
-{ 
-    vector<MacroBlock>::const_iterator mbi = mbinfo.begin();
-    int intra = 0;
-    for( mbi = mbinfo.begin(); mbi < mbinfo.end(); ++mbi)
-    {
-        if( mbi->best_me->mb_type&MB_INTRA )
-            ++intra;
-    }
-    return static_cast<double>(intra) / mbinfo.size();
-}
-
-/* *********************
- *
- * Commit   -   Commit to the current encoding of the frame
- * flush the coder buffer content to the elementary stream output.
- *
- * *********************/
- 
- void Picture::CommitCoding()
- {
-    coding->FlushBuffer();
- }
-
-/* *********************
- *
- * DiscardCoding   -   Discard the current encoding of the frame
- * set coder buffer empty discarding current contents.
- *
- * *********************/
- 
- void Picture::DiscardCoding()
- {
-    coding->ResetBuffer();
- }
 
 /* 
  * Local variables:

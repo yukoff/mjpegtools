@@ -1,8 +1,7 @@
-#ifndef _MPEG2CODING_HH
-#define _MPEG2CODING_HH
+#ifndef _MPEG2CODER_HH
+#define _MPEG2CODER_HH
 
-// TODO should be renamed to mpeg2codingbuf.hh
-/* mpeg2encoding.hh - (Partial) MPEG2 packed bit / VLC syntax encoding of a Picture  */
+/* mpeg2coder.hh - MPEG2 packed bit / VLC syntax coding engine */
 
 /*  (C) 2003 Andrew Stevens */
 
@@ -23,20 +22,24 @@
  *
  */
 
-#include <stdlib.h>
+#include <config.h>
 #include "mjpeg_types.h"
 #include "synchrolib.h"
 #include "elemstrmwriter.hh"
 
 class Picture;
 
+class MPEG2CoderState
+{
+    friend class MPEG2Coder;
+private:
+    ElemStrmBufferState writerState;
+};    
 
-class MPEG2CodingBuf
+class MPEG2Coder
 {
 public:
-    MPEG2CodingBuf( EncoderParams &encoder, ElemStrmWriter &writer );
-
-    virtual ~MPEG2CodingBuf();
+	MPEG2Coder( EncoderParams &encoder, ElemStrmWriter &writer );
 
 	void PutUserData( const uint8_t *userdata, int len);
 	void PutGopHdr(int frame, int closed_gop );
@@ -52,43 +55,31 @@ public:
     void PutCPB(int cbp);
 
 
+    inline void PutBits( uint32_t val, int n) { writer.PutBits( val, n ); }
+    inline int64_t BitCount() { return writer.BitCount(); }
+    inline void AlignBits() { writer.AlignBits(); }
+    inline bool Aligned() { return writer.Aligned(); }
 
-    inline void PutBits( uint32_t val, int n)
-    {
-    	frag_buf->PutBits( val, n );
-    }
+    //
+    // Eventually these may actually do something coding state manipulation...
+    //
+    inline void EmitCoded() { writer.FlushBuffer(); }
+    inline MPEG2CoderState CurrentState() 
+        {
+            MPEG2CoderState state;
+            state.writerState = writer.CurrentState();
+            return state;
+        }
 
-
-    inline int ByteCount() const
-    {
-    	return frag_buf->ByteCount();
-    }
-
-    inline void AlignBits()
-    {
-    	frag_buf->AlignBits();
-    }
-
-    inline bool Aligned() const
-    {
-    	return frag_buf->Aligned();
-    }
-
-    inline void FlushBuffer()
-    {
-    	frag_buf->FlushBuffer();
-    }
-
-    inline void ResetBuffer()
-    {
-    	frag_buf->ResetBuffer();
-    }
+    inline void RestoreCodingState( const MPEG2CoderState &restore) 
+        {
+            writer.RestoreState( restore.writerState );
+        }
 
 private:
 	void PutSeqExt();
 	void PutSeqDispExt();
 	int FrameToTimeCode( int gop_timecode0_frame );
-
 
 
     inline void PutDClum(int val)
@@ -141,7 +132,9 @@ private:
 
 private:
 	EncoderParams &encparams;
-	ElemStrmFragBuf	*frag_buf;
+    ElemStrmWriter &writer;
+
+
 
     const static VLCtable addrinctab[33];
     const static VLCtable mbtypetab[3][32];

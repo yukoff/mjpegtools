@@ -20,163 +20,107 @@
  *
  */
 
+#include <config.h>
+#include "stdio.h"
 #include "mjpeg_types.h"
 
 class EncoderParams;
 
-class ElemStrmWriter 
-{
-public:
-    ElemStrmWriter( );
-    virtual ~ElemStrmWriter() = 0;
-    virtual void WriteOutBufferUpto( const uint8_t *buffer, const uint32_t flush_upto ) = 0;
-    inline uint64_t Flushed() const { return flushed; }
-    
-    virtual uint64_t BitCount() = 0;
-protected:
-    uint64_t flushed;
-};
-
-
-
 /******************************
  *
- * Elementry stream buffer used to accumulate (byte-aligned) fragments ofencoded video.  Currently
- * each frame has its own buffer.
+ * Elementry stream buffering state: used to hold the state of output buffer
+ * at marked points prior to flushing.
  *
  *****************************/
 
-class OutputFragBuf
+class ElemStrmBufferState
 {
-public:
-	OutputFragBuf();
-    virtual ~OutputFragBuf();
-
-    /**************
-     *
-     * Flush out buffer
-     * N.b. attempts to flush in non byte-aligned states are illegal
-     * and will abort
-     *
-     *************/
-    virtual void FlushBuffer() = 0;
-
-    /**************
-     *
-     * Reset buffer - empty buffer discarding current contents.
-     *
-     * ***********/
-
-    virtual void ResetBuffer() = 0;
-
-    /**************
-     *
-     * Write rightmost (least significant) n (0<=n<=32) bits of val to current buffer
-     *
-     *************/
-    virtual void PutBits( uint32_t val, int n) = 0;
-
-    inline void AlignBits()
-    {
-    	if (outcnt!=8)
-    		PutBits(0,outcnt);
-    }
-    inline bool Aligned() const { return outcnt == 8; }
-    inline int ByteCount() const { return unflushed; }
-
 protected:
-    int unflushed;
+    int64_t bytecnt;            // Bytes flushed and pending
+    int32_t unflushed;          // Unflushed bytes in buffer
     int outcnt;                 // Bits unwritten in current output byte
-    uint32_t pendingbits;
+                                // (buffer[unflushed]).
+public:
+    int serial_id;              // We count flushes so we can detect
+                                // attempts to rewind back to flushed
+                                // buffer states
 };
 
-
-/******************************
- *
- * Elementry stream buffer used to accumulate (byte-aligned) fragments ofencoded video.  Currently
- * each frame has its own buffer.
- *
- *****************************/
-
-class ElemStrmFragBuf : public OutputFragBuf
+class ElemStrmWriter : public ElemStrmBufferState
 {
 public:
-	ElemStrmFragBuf( ElemStrmWriter &outstrm);
-    ~ElemStrmFragBuf(); 
+	ElemStrmWriter( EncoderParams &encoder );
+    ~ElemStrmWriter();
+    
+    /********************
+     *
+     * Return a buffer state that we can restore back to (provided no flush
+     * has take place since then!)
+     *
+     * N.b. attempts to mark states that are no byte-aligned are illegal
+     * and will abort
+     *
+     *******************/
+
+    ElemStrmBufferState CurrentState();
 
     /**************
      *
-     * Flush out buffer
+     * Flush out buffer (buffer states recorded up to this point can no
+     * longer be restored).
      * N.b. attempts to flush in non byte-aligned states are illegal
      * and will abort
      *
      *************/
-    virtual void FlushBuffer();
+    void FlushBuffer();
 
     /**************
-     * 
-     * Reset buffer - empty buffer discarding current contents.
-     * 
-     * ***********/
-     
-    virtual void ResetBuffer();
-    
-    /**************
      *
-     * Write rightmost (least significant) n (0<=n<=32) bits of val to current buffer 
+     * Restore output state (including the output bit count)
+     * back to the specified state.
      *
      *************/
-    virtual void PutBits( uint32_t val, int n);
+
+    void RestoreState( const ElemStrmBufferState &restore );
+
+    /**************
+     *
+     * Write rightmost n (0<=n<=32) bits of val to outfile 
+     *
+     *************/
+    void PutBits( uint32_t val, int n);
+
+    void AlignBits();
+    inline bool Aligned() { return outcnt == 8; }
+    inline int64_t BitCount() { return 8LL*bytecnt + (8-outcnt); }
+
     
+protected:
+    virtual void WriteOutBufferUpto( const size_t flush_upto ) = 0;
 private:
-    void AdjustBuffer();
+    void ExpandBuffer();
 
 protected:
-    ElemStrmWriter &writer;
     uint8_t *buffer;            // Output buffer - used to hold byte
                                 // aligned output before flushing or
                                 // backing up and re-encoding
-    int buffer_size;
+    uint32_t buffer_size;
+private:
+	EncoderParams &encparams;
+    uint32_t pendingbits;
+    int last_flushed_serial_id; // Serial Id of buffer state flushed last
 };
 
 
-/******************************
- *
- * Elementry stream buffer used to accumulate (byte-aligned) fragments ofencoded video.  Currently
- * each frame has its own buffer.
- *
- *****************************/
-
-class CountOnlyFragBuf : public OutputFragBuf
+class FILE_StrmWriter : public ElemStrmWriter
 {
 public:
-	CountOnlyFragBuf();
-    ~CountOnlyFragBuf();
+    FILE_StrmWriter( EncoderParams &encoder, const char *ofile_ptr ); 
+    virtual ~FILE_StrmWriter();       
+    virtual void WriteOutBufferUpto( const size_t flush_upto );
 
-    /**************
-     *
-     * Flush out buffer
-     * N.b. attempts to flush in non byte-aligned states are illegal
-     * and will abort
-     *
-     *************/
-    virtual void FlushBuffer();
-
-    /**************
-     *
-     * Reset buffer - empty buffer discarding current contents.
-     *
-     * ***********/
-
-    virtual void ResetBuffer();
-
-    /**************
-     *
-     * Write rightmost (least significant) n (0<=n<=32) bits of val to current buffer
-     *
-     *************/
-    virtual void PutBits( uint32_t val, int n);
-
+private:
+    FILE *outfile;
 };
 
 /* 
