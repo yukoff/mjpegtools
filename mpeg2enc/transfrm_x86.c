@@ -25,28 +25,27 @@
 #include <math.h>
 #include "mjpeg_types.h"
 #include "mjpeg_logging.h"
+#include "attributes.h"
 #include "mmx.h"
 #include "simd.h"
 
 
-/* Routines written in assembler */
+/* Routines written  in pure (NASM) assembler */
 
-extern void fdct_mmx( int16_t * blk );
-extern void init_fdct_sse(void);
-extern void fdct_sse( int16_t * blk );
-extern void fdct_test( int16_t * blk );
+extern void idct_test(int16_t *blk);
+extern void idct_sse(int16_t *blk);
+extern void idct_mmx(int16_t *blk);
 
-extern void idct_mmx( int16_t * blk );
-extern void idct_sse( int16_t * blk );
-extern void idct_test( int16_t * blk );
+extern void fdct_mmx( int16_t * blk ) __asm__ ("fdct_mmx");
+
+extern void idctfast_mmx( int16_t * blk );
 
 extern void add_pred_mmx (uint8_t *pred, uint8_t *cur,
-						  int lx, int16_t *blk);
+						  int lx, int16_t *blk) __asm__ ("add_pred_mmx");
 extern  void sub_pred_mmx (uint8_t *pred, uint8_t *cur,
-						  int lx, int16_t *blk);
+						  int lx, int16_t *blk) __asm__ ("sub_pred_mmx");
 
-
-static inline void
+static __inline__ void
 mmx_sum_4_word_accs( mmx_t *accs, int32_t *res )
 {
 	movq_m2r( *accs, mm1 );
@@ -64,7 +63,7 @@ mmx_sum_4_word_accs( mmx_t *accs, int32_t *res )
 }
 
 
-static inline void
+static __inline__ void
 sum_sumsq_8bytes( uint8_t *cur_lum_mb, 
 				  uint8_t *pred_lum_mb,
 				  mmx_t *sumtop_accs,
@@ -264,34 +263,20 @@ int field_dct_best_mmx( uint8_t *cur_lum_mb, uint8_t *pred_lum_mb, int stride)
 
 void init_x86_transform()
 {
-        char *opt_type1="";
-        int flags = cpu_accel();
-    	int d_quant_fdct = disable_simd("fdct");
-    	int d_quant_idct = disable_simd("idct");
+    int flags = cpu_accel();
+    const char *opt_type1="";
 
-		if( !d_quant_fdct )
-			pfdct = fdct_mmx;
-		else
-			mjpeg_info(" Disabling fdct");
-
-		if( !d_quant_idct )
-			pidct = idct_mmx;
-		else
-            mjpeg_info(" Disabling idct");
-
-		padd_pred = add_pred_mmx;
-		psub_pred = sub_pred_mmx;
-		pfield_dct_best = field_dct_best_mmx;
-
-        if( flags & ACCEL_X86_SSE ) {
-            init_fdct_sse();
-    		if( !d_quant_fdct )
-    			pfdct = fdct_sse;
-    		if( !d_quant_idct )
-    			pidct = idct_sse;
-            opt_type1 = "SSE and ";
-
-        }
-
-	mjpeg_info( "SETTING %sMMX for TRANSFORM!",opt_type1);
+    pfdct = fdct_mmx;
+    pidct = idct_mmx;
+    padd_pred = add_pred_mmx;
+    psub_pred = sub_pred_mmx;
+    pfield_dct_best = field_dct_best_mmx;
+#if 1
+    if( flags &  ACCEL_X86_SSE )
+    {
+        pidct = idct_sse;
+        opt_type1="SSE and ";
+    }
+#endif
+    mjpeg_info( "SETTING %sMMX for TRANSFORM!",opt_type1);
 }

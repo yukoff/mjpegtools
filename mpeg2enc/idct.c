@@ -215,10 +215,6 @@ extern void idct_sse(int16_t *blk);
 
 static double coslu[8][8];
 
-/* reference idct taken from "ieeetest.c"
- * Written by Tom Lane (tgl@cs.cmu.edu).
- * Released to public domain 11/22/93.
- */   
 void idct_ref(int16_t *block)
 {
     int x,y,u,v;
@@ -266,74 +262,64 @@ void init_idct_ref(void)
     }
 }
 
-struct dct_test {
-    int bounds,maxerr,iter;
-    int me[64],mse[64];
-};
-
-void dct_test_and_print(struct dct_test *dt,int range,int16_t *origblock,int16_t *block)
-{
-    int b,m,i;
-
-    b=0;
-    m=0;
-    for( i=0; i<64; i++ ) {
-        int x=block[i]-origblock[i];
-        int ax=abs(x);
-        dt->me[i]+=x;
-        dt->mse[i]+=x*x;
-        if( ax>m )
-            m=ax;
-        if( block[i]<-range || block[i]>=range )
-            b++;
-        if( origblock[i]<-range || origblock[i]>=range ) {
-            // mjpeg_info("*********** REFERENCE VERSION OUT OF BOUNDS\n");
-        }
-    }
-    dt->bounds+=b;
-    if (m > dt->maxerr )
-        dt->maxerr = m;
-    dt->iter++;
-    if( !(dt->iter&65535) ) {
-        int sme=0,srms=0;
-
-        for( i=0; i<64; i++ ) {
-            sme+=dt->me[i];
-            srms+=dt->mse[i];
-        }
-        mjpeg_info("dct_test[%d]: max error=%d, mean error=%.8f, rms error=%.8f; bounds err=%d\n",
-                   dt->iter,dt->maxerr,
-                   sme/(dt->iter*64.),
-                   srms/(dt->iter*64.),
-                   dt->bounds);
-        for( i=0; i<8; i++ ) {
-            int j;
-
-            for( j=0; j<8; j++ )
-                fprintf(stderr,"%9.6f%c",((double)dt->me[i*8+j])/dt->iter,j==7?'\n':' ');
-            for( j=0; j<8; j++ )
-                fprintf(stderr,"%9.6f%c",((double)dt->mse[i*8+j])/dt->iter,j==7?'\n':' ');
-            fprintf(stderr,"\n");
-        }
-    }
-}
-
-static struct dct_test idct_res;
+static int idct_inbounds=0, idct_outbounds=0, idct_err=0, idct_max_err=0, idct_iter=0;
 
 void idct_test(int16_t *block)
 {
     int16_t origblock[64];
+    int i,e,m,b;
+
+    b=0;
+    for( i=0; i<64; i++ )
+        if( block[i]<-2048 || block[i]>2047 )
+            b++;
+    idct_inbounds+=b;
 
     memcpy(origblock,block,64*sizeof(int16_t));
 
     idct_ref(origblock);
     // idct(origblock);
 
-    idct(block);
+    // idct(block);
     // idct_mmx(block);
-    // idct_sse(block);
+    idct_sse(block);
 
-    dct_test_and_print(&idct_res,256,origblock,block);
+    b=0;
+    e=0;
+    m=0;
+    for( i=0; i<64; i++ ) {
+        int x=abs(origblock[i]-block[i]);
+        e+=x;
+        if( x>m )
+            m=x;
+        if( block[i]<-256 || block[i]>255 )
+            b++;
+        if( origblock[i]<-256 || origblock[i]>255 ) {
+            // mjpeg_info("*********** REFERENCE VERSION OUT OF BOUNDS\n");
+        }
+    }
+    if( m > 1 ) {
+        fprintf(stderr,"\n\nREFERENCE MATRIX:\n");
+        for( i=0; i<64; i++ ) {
+            fprintf(stderr,"%3d ",origblock[i]);
+            if( (i&7)==7 )
+                fprintf(stderr,"\n");
+        }
+        fprintf(stderr,"TEST MATRIX:\n");
+        for( i=0; i<64; i++ ) {
+            fprintf(stderr,"%3d ",block[i]);
+            if( (i&7)==7 )
+                fprintf(stderr,"\n");
+        }
+    }
+    idct_err+=e;
+    idct_outbounds+=b;
+    if (m > idct_max_err )
+        idct_max_err = m;
+    idct_iter++;
+    if( !(idct_iter&65535) ) {
+        mjpeg_info("idct_test: total error %d, max error=%d, avg error=%g (over %d iterations); bounds err: in=%d, out=%d\n",idct_err,idct_max_err,((double)idct_err)/idct_iter,idct_iter,idct_inbounds,idct_outbounds);
+    }
 }
 #endif
 
@@ -346,7 +332,6 @@ void init_idct(void)
     iclp[i] = (i<-256) ? -256 : ((i>255) ? 255 : i);
 
 #ifdef IDCTTEST
-  memset(&idct_res,0,sizeof(idct_res));
   init_idct_ref();
 #endif
 }
