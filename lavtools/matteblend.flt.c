@@ -19,18 +19,13 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
 #include "yuv4mpeg.h"
 
-static void usage (void) {
+static void usage () {
 
    fprintf (stderr, "usage:  matteblend.flt\n"
                     "no params at the moment - color saturation falloff or such has to be implemented\n");
@@ -45,19 +40,20 @@ static void blend (unsigned char *src0[3], unsigned char *src1[3], unsigned char
    register unsigned int len = width * height;
 
    for (i=0; i<len; i+=4) {
-      dst[0][i]   = ((235 - matte[0][i]   )   * src0[0][i]   + (matte[0][i] - 16 )  * src1[0][i])   / 219;
-      dst[0][i+1] = ((235 - matte[0][i+1] ) * src0[0][i+1] + (matte[0][i+1] - 16 )  * src1[0][i+1]) / 219;
-      dst[0][i+2] = ((235 - matte[0][i+2] ) * src0[0][i+2] + (matte[0][i+2] - 16 )  * src1[0][i+2]) / 219;
-      dst[0][i+3] = ((235 - matte[0][i+3] ) * src0[0][i+3] + (matte[0][i+3] - 16 )  * src1[0][i+3]) / 219;            
+      dst[0][i]   = ((255 - matte[0][i])   * src0[0][i]   + matte[0][i]   * src1[0][i])   / 255;
+      dst[0][i+1] = ((255 - matte[0][i+1]) * src0[0][i+1] + matte[0][i+1] * src1[0][i+1]) / 255;
+      dst[0][i+2] = ((255 - matte[0][i+2]) * src0[0][i+2] + matte[0][i+2] * src1[0][i+2]) / 255;
+      dst[0][i+3] = ((255 - matte[0][i+3]) * src0[0][i+3] + matte[0][i+3] * src1[0][i+3]) / 255;            
    }
 
    len>>=2; /* len = len / 4 */
+
    /* do we really have to "downscale" matte here? */
    for (i=0,j=0; i<len; i++, j+=2) {
       int m = (matte[0][j] + matte[0][j+1] + matte[0][j+width] + matte[0][j+width+1]) >> 2;
       if ((j % width) == (width - 2)) j += width;
-      dst[1][i] = ((235-m) * src0[1][i] + (m-16) * src1[1][i]) / 219;
-      dst[2][i] = ((235-m) * src0[2][i] + (m-16) * src1[2][i]) / 219;
+      dst[1][i] = ((255-m) * src0[1][i] + m * src1[1][i]) / 255;
+      dst[2][i] = ((255-m) * src0[2][i] + m * src1[2][i]) / 255;
    }
 }
 
@@ -69,65 +65,40 @@ int main (int argc, char *argv[])
    unsigned char *yuv1[3]; /* input 1 */
    unsigned char *yuv2[3]; /* input 2 */
    unsigned char *yuv[3];  /* output */
-   y4m_stream_info_t streaminfo;
-   y4m_frame_info_t frameinfo;
+   int w, h, rate;
    int i;
-   int w, h;
 
    if (argc > 1) {
       usage ();
       exit (1);
    }
 
-   y4m_init_stream_info (&streaminfo);
-   y4m_init_frame_info (&frameinfo);
-
-   i = y4m_read_stream_header (in_fd, &streaminfo);
-   if (i != Y4M_OK) {
-      fprintf (stderr, "%s: input stream error - %s\n", 
-	       argv[0], y4m_strerr(i));
+   i = yuv_read_header (in_fd, &w, &h, &rate);
+   if (i != 0) {
+      fprintf (stderr, "%s: input stream error\n", argv[0]);
       exit (1);
    }
-   w = y4m_si_get_width(&streaminfo);
-   h = y4m_si_get_height(&streaminfo);
 
-   yuv[0] =  malloc (w * h);
-   yuv0[0] = malloc (w * h);
-   yuv1[0] = malloc (w * h);
-   yuv2[0] = malloc (w * h);
-   yuv[1] =  malloc (w * h / 4);
-   yuv0[1] = malloc (w * h / 4);
-   yuv1[1] = malloc (w * h / 4);
-   yuv2[1] = malloc (w * h / 4);
-   yuv[2] =  malloc (w * h / 4);
-   yuv0[2] = malloc (w * h / 4);
-   yuv1[2] = malloc (w * h / 4);
-   yuv2[2] = malloc (w * h / 4);
+   yuv[0] = (char *)malloc (w*h);   (char *)yuv0[0] = malloc (w*h);   (char *)yuv1[0] = malloc (w*h);   (char *)yuv2[0] = malloc (w*h);
+   yuv[1] = (char *)malloc (w*h/4); (char *)yuv0[1] = malloc (w*h/4); (char *)yuv1[1] = malloc (w*h/4); (char *)yuv2[1] = malloc (w*h/4);
+   yuv[2] = (char *)malloc (w*h/4); (char *)yuv0[2] = malloc (w*h/4); (char *)yuv1[2] = malloc (w*h/4); (char *)yuv2[2] = malloc (w*h/4);
 
-   y4m_write_stream_header (out_fd, &streaminfo);
+   yuv_write_header (out_fd, w, h, rate);
 
    while (1) {
-      i = y4m_read_frame(in_fd, &streaminfo, &frameinfo, yuv0);
-      if (i == Y4M_ERR_EOF)
-	exit (0);
-      else if (i != Y4M_OK)
+      i = yuv_read_frame(in_fd, yuv0, w, h);
+      if (i<=0)
+         exit (0);
+      i = yuv_read_frame(in_fd, yuv1, w, h);
+      if (i<=0)
          exit (1);
-      i = y4m_read_frame(in_fd, &streaminfo, &frameinfo, yuv1);
-      if (i != Y4M_OK)
+      i = yuv_read_frame(in_fd, yuv2, w, h);
+      if (i<=0)
          exit (1);
-      i = y4m_read_frame(in_fd, &streaminfo, &frameinfo, yuv2);
-      if (i != Y4M_OK)
-         exit (1);
-      /* constrain matte luma */
-      for (i = 0; i < w*h; i++) {
-	  if (yuv2[0][i] < 16) yuv2[0][i] = 16;
-	  else
-	      if (yuv2[0][i] > 235) yuv2[0][i] = 235;
-      }
 
       blend (yuv0, yuv1, yuv2, w, h, yuv);
 
-      y4m_write_frame (out_fd, &streaminfo, &frameinfo, yuv);
+      yuv_write_frame (out_fd, yuv, w, h);
 
    }
 

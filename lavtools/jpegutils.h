@@ -28,9 +28,9 @@
  /*
  * jpeg_data:       buffer with input / output jpeg
  * len:             Length of jpeg buffer
- * itype:           Y4M_ILACE_NONE: Not interlaced
- *                  Y4M_ILACE_TOP_FIRST: Interlaced, top-field-first
- *                  Y4M_ILACE_BOTTOM_FIRST: Interlaced, bottom-field-first
+ * itype:           0: Not interlaced
+ *                  1: Interlaced, Odd first
+ *                  2: Interlaced, even first
  * ctype            Chroma format for decompression.
  *                  Currently always 420 and hence ignored.
  * raw0             buffer with input / output raw Y channel
@@ -44,10 +44,7 @@ int decode_jpeg_raw (unsigned char *jpeg_data, int len,
                      int itype, int ctype, int width, int height,
                      unsigned char *raw0, unsigned char *raw1,
                      unsigned char *raw2);
-int decode_jpeg_gray_raw (unsigned char *jpeg_data, int len,
-			  int itype, int ctype, int width, int height,
-			  unsigned char *raw0, unsigned char *raw1,
-			  unsigned char *raw2);
+
 int encode_jpeg_raw (unsigned char *jpeg_data, int len, int quality,
                      int itype, int ctype, int width, int height,
                      unsigned char *raw0, unsigned char *raw1,
