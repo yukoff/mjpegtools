@@ -4,15 +4,12 @@ MAINTAINERCLEANFILES = Makefile.in
 
 bin_PROGRAMS = yuvycsnoise yuvkineco
 
-noinst_LTLIBRARIES = libyuvfilters.la
+noinst_LIBRARIES = libyuvfilters.a
 
 AM_CPPFLAGS = -I$(top_srcdir)/utils
-MJPEGLIB = $(top_builddir)/utils/libmjpegutils.la
-if HAVE_ALTIVEC
-MJPEGLIB += $(top_builddir)/mpeg2enc/libmpeg2encpp.la
-endif
+MJPEGLIB = $(top_builddir)/utils/libmjpegutils.a
 
-libyuvfilters_la_SOURCES = \
+libyuvfilters_a_SOURCES = \
 	addtask.c \
 	alloctask.c \
 	initframe.c \
@@ -27,8 +24,8 @@ noinst_HEADERS = \
 
 yuvkineco_SOURCES = main.c
 yuvkineco_CFLAGS = -DFILTER=yuvkineco
-yuvkineco_LDADD = libyuvfilters.la $(MJPEGLIB)
+yuvkineco_LDADD = libyuvfilters.a $(MJPEGLIB)
 
 yuvycsnoise_SOURCES = main.c
 yuvycsnoise_CFLAGS = -DFILTER=yuvycsnoise
-yuvycsnoise_LDADD = libyuvfilters.la $(MJPEGLIB)
+yuvycsnoise_LDADD = libyuvfilters.a $(MJPEGLIB)

@@ -14,13 +14,13 @@ config.sub
 confdefs.h
 ltmain.sh
 libtool
+mjpegtools-config
 mjpegtools*.tar.gz
 *mjpegtools*.deb
 mjpegtools_*.asc
 mjpegtools_*.changes
 mjpegtools_*.dsc
 mjpegtools.pc
-mjpegtools*.rpm
 depcomp
 install-sh
 missing
@@ -28,4 +28,3 @@ mkinstalldirs
 compile
 mjpegtools.spec
 autom4te.cache
-*-stamp

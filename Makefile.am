@@ -1,31 +1,17 @@
 # Process with automake to produce Makefile.in
 
-# NOTE:  utils and mpeg2enc MUST be built first so that libmjpegutils AND
-#        libmpeg2encpp exist.  Then in the following Makefile.am files if
-#        HAVE_ALTIVEC is defined libmpeg2encpp will be added to the list of
-#        libraries dependencies.  All this because utils/altivec/libaltivec.la
-#        contains routines which  which should have gone into the encoder
-#        library libmpeg2encpp.  Sigh.  Feel free to do it differently if you
-#        can come up with a better method.
-
 SUBDIRS = \
 	utils \
-	mpeg2enc \
 	lavtools \
 	aenc \
 	mplex \
+	mpeg2enc \
 	scripts \
 	docs \
-	yuvcorrect \
-	yuvscaler \
 	yuvdenoise \
-	yuvfilters \
-	yuvdeinterlace \
-	y4mdenoise \
-	y4mscaler \
-	y4munsharp \
-        y4mutils \
-	debian
+	yuvfilters
+
+bin_SCRIPTS = mjpegtools-config
 
 #
 # Add any non autoconf'd files here, extra readmes and other misc 
@@ -42,13 +28,20 @@ EXTRA_DIST = \
 	README.glav \
 	README.lavpipe \
 	README.transist \
-	INSTALL \
-	INSTALL.real \
 	TODO \
+	debian/changelog \
+	debian/control \
+	debian/copyright \
+	debian/libmjpegtools-dev.files \
+	debian/libmjpegtools0.files \
+	debian/mjpegtools.docs \
+	debian/mjpegtools.files \
+	debian/mjpegtools.info \
+	debian/mjpegtools.manpages \
+	debian/rules \
 	mjpeg_howto.txt \
 	mjpegtools.spec \
 	mjpegtools.spec.in \
-	mjpegtools.pc \
 	mjpegtools.pc.in \
 	autogen.sh
 
@@ -56,8 +49,6 @@ pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = mjpegtools.pc
 
 DISTCLEANFILES = \
-	mjpegtools-config.h \
-	mjpegtools.pc \
 	confdefs.h \
 	config.cache \
 	config.status \

@@ -3,23 +3,30 @@
 EXTRA_DIST = \
 	README \
 	INSTRUCT \
-	mpeg_systems_paper_0.99.ps.gz \
-	Doxyfile \
 	TODO
 
 MAINTAINERCLEANFILES = Makefile.in
 
-AM_CPPFLAGS = -I $(top_srcdir) -I $(top_srcdir)/utils
+INCLUDES = -I $(top_srcdir) -I $(top_srcdir)/utils
 
 bin_PROGRAMS = mplex
 
 lib_LTLIBRARIES = libmplex2.la
 
+if HAVE_ZALPHA
+  ZALPHA_FILES = zalphastrm.hpp zalphastrm_in.cpp zalphastrm_out.cpp
+  ZALPHA_FLAGS = -DZALPHA
+else
+  ZALPHA_FILES =
+  ZALPHA_FLAGS =
+endif
+
+
 libmplex2_la_SOURCES = \
 	ac3strm_in.cpp \
 	audiostrm_out.cpp \
 	bits.cpp \
-	decodebufmodel.cpp \
+	buffer.cpp \
 	dtsstrm_in.cpp \
 	inputstrm.cpp \
 	interact.cpp \
@@ -30,18 +37,16 @@ libmplex2_la_SOURCES = \
 	stillsstream.cpp \
 	stream_params.cpp \
 	systems.cpp \
+	vector.cpp \
 	videostrm_in.cpp \
 	videostrm_out.cpp \
-	subpstream.cpp
+	$(ZALPHA_FILES)
 
-libmplex_includedir = $(pkgincludedir)/mplex
-
-libmplex_include_HEADERS = \
+noinst_HEADERS = \
 	audiostrm.hpp \
 	aunit.hpp \
-	aunitbuffer.hpp \
 	bits.hpp \
-	decodebufmodel.hpp \
+	buffer.hpp \
 	inputstrm.hpp \
 	interact.hpp \
 	mplexconsts.hpp \
@@ -51,28 +56,23 @@ libmplex_include_HEADERS = \
 	stillsstream.hpp \
 	stream_params.hpp \
 	systems.hpp \
+	vector.hpp \
 	videostrm.hpp
 
 libmplex2_la_LDFLAGS =  \
-	$(LT_STATIC) \
 	-version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
-	-release $(LT_RELEASE) $(EXTRA_LDFLAGS)
+	-release $(LT_RELEASE) \
+	-export-dynamic 
 
 libmplex2_la_LIBADD = \
-	$(top_builddir)/utils/libmjpegutils.la
+	$(top_builddir)/utils/libmjpegutils.a
 
-# Need to do this because of the way utils/altivec/* was done - it makes a
-# reference to a function (next_larger_quant)  in mpeg2enc's library.  OSX
-# doesn't care but Fedora4/PPC's linker gives an undefined symbol error
-if HAVE_ALTIVEC
-libmplex2_la_LIBADD += $(top_builddir)/mpeg2enc/libmpeg2encpp.la
-endif
-
-libmplex2_la_CXXFLAGS =
+libmplex2_la_CXXFLAGS = $(ZALPHA_FLAGS)
 
 mplex_SOURCES = main.cpp 
 
-mplex_DEPENDENCIES = libmplex2.la
-
-mplex_LDADD = libmplex2.la @LIBGETOPT_LIB@ $(LIBM_LIBS)
+mplex_LDADD = \
+	$(top_builddir)/utils/libmjpegutils.a \
+	$(top_builddir)/mplex/libmplex2.la \
+	@LIBGETOPT_LIB@ $(LIBM_LIBS) 
 
