@@ -40,7 +40,7 @@ ____________________________________________________________________________/
 Example one: Make a transistion from one movie to another one.
 
 Let's assume that we have got two 352x288 PAL files:
-intro.avi (1040 frames) and epilogue.qt (3920 frames). Now we want
+intro.avi (1040 frames) and epilogue.mov (3920 frames). Now we want
 to make a transistion between them that lasts for two seconds
 (2 sec = 50 frames, as they are PAL movies).
 We also have to take care that both share the same dimensions - if
@@ -64,8 +64,8 @@ has to inform lav2yuv which frames it should output. $o will
 be replaced by the offset and $n will be replaced by the number
 of frames that lavpipe wants lav2yuv to output. The -n 1
 parameter is of course optional, and any other parameters to
-lav2yuv could be added. The second line for epilogue.qt might
-look like this: "lav2yuv -o $o -f $n epilogue.qt"
+lav2yuv could be added. The second line for epilogue.mov might
+look like this: "lav2yuv -o $o -f $n epilogue.mov"
 
 Now follow all the sequences of the Pipe List, each of which
 consists of a listing of the input streams used and a command
@@ -87,23 +87,23 @@ of the stream.
 The second sequence is the actual transistion. So the first
 line is "50" (two seconds), the second one "2" (we use both streams).
 The following line will be "0 990" (intro.avi will be continued
-at frame 990) and then "1 0" follows (epilogue.qt starts with
+at frame 990) and then "1 0" follows (epilogue.mov starts with
 frame 0).
 The next line is the filter command, in our case
 "transist.flt -s $o -n $n -o 0 -O 255 -d 50"
 The -s $o -n $n parameters equal to the -o $o -f $n parameters
 of lav2yuv, -o 0 means that at the beginning of the transistion,
-only intro.avi is visible (opacity of epilogue.qt = 0).
+only intro.avi is visible (opacity of epilogue.mov = 0).
 As you would have expected, -O 255 means that at the end of
-the transistion, only epilogue.qt is visible (opacity of
-epilogue.qt = 255 = 100%) - the opacity will be linearly
+the transistion, only epilogue.mov is visible (opacity of
+epilogue.mov = 255 = 100%) - the opacity will be linearly
 interpolated inbetween. And finally -d 50 is the duration
 of the transistion in frames and should be equal to the
 first line (duration in frames) of the sequence in most cases.
 
-The last sequence continues with only epilogue.qt (the last
+The last sequence continues with only epilogue.mov (the last
 3870 frames), thus the first line is "3870". The second line
-is "1" (only one stream), then "1 50" follows (epilogue.qt,
+is "1" (only one stream), then "1 50" follows (epilogue.mov,
 beginning with frame 50). The filter command line is "-" again.
 
 Finally, our Pipe List file should look like this:
@@ -112,7 +112,7 @@ Finally, our Pipe List file should look like this:
 LAV Pipe List
 2
 lav2yuv -o $o -f $n -n 1 intro.avi
-lav2yuv -o $o -f $n epilogue.qt
+lav2yuv -o $o -f $n epilogue.mov
 990
 1
 0 0
@@ -211,45 +211,33 @@ A filter program consists only of 4 parts:
 2. Read in and write out the YUV headers, could look like this:
 
    int fd_in = 0, fd_out = 1; /* stdin, stdout */
-   y4m_stream_info_t istream, ostream;
    int res, width, height, frame_rate_code;
 
-   y4m_init_stream_info(&istream);
-   y4m_init_frame_info(&iframe);
-
-   if (y4m_read_stream_header (fd_in, &istream) != Y4M_OK)
+   if ((res = yuv_read_header (fd_in, &width, &height, &frame_rate_code)) != 0)
       exit (1);
-
-   y4m_init_stream_info(&ostream);
-   y4m_copy_stream_info(&ostream,&istream);
-   y4m_write_stream_header (fd_out, width, heigth, frame_rate_code);
+   yuv_write_header (fd_out, width, heigth, frame_rate_code);
    
 3. Allocate the YUV buffer(s) - one for each input stream and perhaps one
    for the output or an arbitrary number of temporary buffers (no bloated
    code, please ;-) )
    
    char *yuv_buffer[3]; /* this is one yuv buffer */
-   yuv_buffer[0] = (char *) malloc(y4m_si_get_plane_length(&istream, 0)); /* Y' */
-   yuv_buffer[1] = (char *) malloc(y4m_si_get_plane_length(&istream, 1)); /* Cr */
-   yuv_buffer[2] = (char *) malloc(y4m_si_get_plane_length(&istream, 2)); /* Cb */
+   yuv_buffer[0] = (char *) malloc (width   * height);   /* luminance */
+   yuv_buffer[1] = (char *) malloc (width/2 * height/2); /* chrominance_b */
+   yuv_buffer[2] = (char *) malloc (width/2 * height/2); /* chrominance_r */
 
 4. The loop - while (number of frames processed) < (-n parameter)
 
 4.1. Read the input frames, one of those for each input stream (e.g. yuv_buffer[123])
 
-   while (y4m_read_frame (fd_in, &istream, &iframe, yuv_buffer) == Y4M_OK)
-         {
+   if (res = yuv_read_frame (fd_in, yuv_buffer, width, height)) <= 0)
+      exit (0);
+
 4.2. Process the input buffers in any way you want.
 
 5. Write out the result:
 
-         y4m_write_frame(fd_out, &ostream, &iframe, yuv_buffer);
-         }
-
-6. Clean up:
-     y4m_fini_frame(&iframe);
-     y4m_fini_stream_info(&istream);
-     y4m_fini_stream_info(&ostream);
+   yuv_write_frame (fd_out, yuv_buffer, width, height);
 
 That's all. You should in any case have a look at the existing filters,
 transist.flt.c and matteblend.flt.c.
