@@ -53,20 +53,26 @@
  */
 
 
+
+#include "config.h"
 #include "mjpeg_types.h"
 #include "syntaxconsts.h"
 
-#include <deque>
-
-using std::deque;
-
 
 /*
-  Ensure we don't bury a system in wild spawning of
-  threads...
+  How many frames to read in one go
+*/
+
+#define READ_CHUNK_SIZE 3
+
+/*
+  How many frames encoding may be concurrently under way.
+  N.b. there is no point setting this greater than M.
+  Additional parallelism can be exposed at a finer grain by
+  parallelising per-macro-block computations.
  */
 
-#define MAX_WORKER_THREADS 16
+#define MAX_WORKER_THREADS 4
 
 
 
@@ -112,10 +118,7 @@ public:
 							   N.b. when 3:2 pullback is active
 							   this is higher than the frame
 							   decode rate.  */
-	double bit_rate;			/* bits per second, rate decode buffers filled (max rate) */
-	double target_bitrate;		/* Target bit rate to achieve overall for VBR 0  if no target set */
-	unsigned int stream_frames;		/* # Frames to representatively sample stream */
-	double stream_Xhi;					/* Total stream complexity */
+	double bit_rate;			/* bits per second */
 	bool seq_hdr_every_gop;
 	bool seq_end_every_gop;	/* Useful for Stills sequences... */
 	bool svcd_scan_data;
@@ -140,7 +143,6 @@ public:
 	bool ignore_constraints;	/* Disabled conformance checking of
 								 * hor_size, vert_size and
 								 * samp_rate */
-    bool dualprime;             /* Allow dual prime motion compensation */
 			
 
 	bool prog_seq; /* progressive sequence */
@@ -164,6 +166,7 @@ public:
 	bool fieldpic;			/* use field pictures */
 	bool pulldown_32;		/* 3:2 Pulldown of movie material */
 	bool topfirst;
+
 
 	/************
 	 *
@@ -222,8 +225,8 @@ public:
 								*/
     int video_buffer_size;    /* Video buffer requirement target */
 
-    unsigned int N_max;				/* number of frames in Group of Pictures (max) */
-    unsigned int N_min;				/* number of frames in Group of Pictures (min) */
+    int N_max;				/* number of frames in Group of Pictures (max) */
+    int N_min;				/* number of frames in Group of Pictures (min) */
     int M;					/* distance between I/P frames */
 
     int M_min;			    /* Minimum distance between I/P frames */
@@ -231,6 +234,13 @@ public:
     bool closed_GOPs;	    /* Force all GOPs to be closed - useful
                              * for satisfying requirements for
                              * multi-angle DVD authoring */
+
+    bool refine_from_rec;	/* Is final refinement of motion
+                             * compensation computed from
+                             * reconstructed reference frame image
+                             * (slightly higher quality, bad for
+                             * multi-threading) or original reference
+                             * frame (opposite) */
 
     int me44_red;			/* Sub-mean population reduction passes
                             * for 4x4 and 2x2 */
@@ -253,18 +263,18 @@ public:
     int encoding_parallelism; /* Maximum number of concurrent worker threads
                                  to be used for encoding  */
 
+    int max_active_ref_frames;
+    int max_active_b_frames;
+
+    bool parallel_read; /* Does the input reader / bufferer
+                               run as a seperate thread?
+                            */
     int unit_coeff_elim;	/* Threshold of unit coefficient
                                    density below which unit
                                    coefficient blocks should be
                                    zeroed.  < 0 implies DCT
                                    coefficient should be included. */
 
-    double coding_tolerance;  /* Fraction of bit allocation that
-                                      actual coding size may deviate from
-                                      target set by rate controller before
-                                      a re-encoding is forced */
-
-    deque<int> chapter_points; /* Frame #'s for where chapters occur (I frames, closed GOP's) */
 
 };
 

@@ -22,20 +22,17 @@
  *
  */
 
+#include <config.h>
+
+
 
 struct MPEG2EncParams
 {
-    int in_img_width;       // MUST match the actual dimensions of the passed frames!
+    int in_img_width;
     int in_img_height;
-    int display_hsize;      // Passed on to display extension header
-    int display_vsize;      // not used in encoding.
-    int level;              // MPEG-2 main profile level to enforce.
     int format;
     int bitrate;
-    int target_bitrate;
     int nonvid_bitrate;
-    unsigned int stream_frames;   	// # Frames of entire stream
-    double stream_Xhi;	 	 		// debug feature total stream complexity...
     int quant;
     int searchrad;
     int mpeg;
@@ -54,7 +51,6 @@ struct MPEG2EncParams
     double hf_q_boost;
     double act_boost;
     double boost_var_ceil;
-    int rate_control;           /* The rate controller to use */
     int video_buffer_size;
     int seq_length_limit;
     int min_GOP_size;
@@ -71,15 +67,18 @@ struct MPEG2EncParams
     int pad_stills_to_vbv_buffer_size;
     int vbv_buffer_still_size;
     int force_interlacing;
-    int input_interlacing;
+    unsigned int input_interlacing;
     int hack_svcd_hds_bug;
     int hack_altscan_bug;
-    int hack_dualprime;
     int mpeg2_dc_prec;
     int ignore_constraints;
     int unit_coeff_elim;
-    int force_cbr;
     int verbose;
+    int allow_parallel_read;    /* This should be set false when lib is
+                                 * used as a component in Multimedia
+                                 * frameworks that do their own thread
+                                 * scheduling / co-routining
+                                 */
 };
 
 #endif
