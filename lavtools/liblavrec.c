@@ -50,19 +50,6 @@
 #include <sys/vfs.h>
 #include <stdlib.h>
 
-/* Because of some really cool feature in video4linux1, also known as
- * 'not including sys/types.h and sys/time.h', we had to include it
- * ourselves. In all their intelligence, these people decided to fix
- * this in the next version (video4linux2) in such a cool way that it
- * breaks all compilations of old stuff...
- * The real problem is actually that linux/time.h doesn't use proper
- * macro checks before defining types like struct timeval. The proper
- * fix here is to either fuck the kernel header (which is what we do
- * by defining _LINUX_TIME_H, an innocent little hack) or by fixing it
- * upstream, which I'll consider doing later on. If you get compiler
- * errors here, check your linux/time.h && sys/time.h header setup.
- */
-#define _LINUX_TIME_H
 #include <linux/videodev.h>
 #ifdef HAVE_SYS_SOUNDCARD_H
 #include <sys/soundcard.h>
@@ -71,6 +58,7 @@
 #include <videodev_mjpeg.h>
 #include <pthread.h>
 
+#include "mjpeg_types.h"
 #include "mjpeg_logging.h"
 #include "liblavrec.h"
 #include "lav_io.h"
@@ -88,6 +76,19 @@
 
 #define NUM_AUDIO_TRIES 500 /* makes 10 seconds with 20 ms pause beetween tries */
 
+#define MAX_MBYTES_PER_FILE_64 ((0x3fffff) * 93/100)        /* 4Tb.  (Most filesystems have  */
+                                                            /* fundamental limitations around ~Tb) */
+#define MAX_MBYTES_PER_FILE_32 ((0x7fffffff >> 20) * 85/100)/* Is less than 2^31 and 2*10^9 */
+#if _FILE_OFFSET_BITS == 64
+#define MAX_MBYTES_PER_FILE MAX_MBYTES_PER_FILE_64
+#else
+#define MAX_MBYTES_PER_FILE MAX_MBYTES_PER_FILE_32
+                                  /* Maximum number of Mbytes per file.
+                                     We make a conservative guess since we
+                                     only count the number of bytes output
+                                     and don't know how big the control
+                                     information will be */
+#endif
 #define MIN_MBYTES_FREE 10        /* Minimum number of Mbytes that should
                                      stay free on the file system, this is also
                                      only a guess */
@@ -97,11 +98,6 @@
 
 #define VALUE_NOT_FILLED -10000
 
-struct YUVP_convert
-{
-	unsigned char	*mmap;
-	unsigned char	*YUVP_buff;
-};
 
 typedef struct {
    int    interlaced;                         /* is the video interlaced (even/odd-first)? */
@@ -115,7 +111,6 @@ typedef struct {
    struct video_mbuf softreq;                 /* Software capture (YUV) buffer requests */
    uint8_t *MJPG_buff;                         /* the MJPEG buffer */
    struct video_mmap mm;                      /* software (YUV) capture info */
-   struct YUVP_convert	*YUVP_convert;        /* Software (YUVP) info */
    unsigned char *YUV_buff;                   /* in case of software encoding: the YUV buffer */
    lav_file_t *video_file;                    /* current lav_io.c file we're recording to */
    lav_file_t *video_file_old;                /* previous lav_io.c file we're recording to (finish audio/close) */
@@ -153,7 +148,6 @@ typedef struct {
    pthread_t software_sync_thread;            /* the thread */
    pthread_mutex_t software_sync_mutex;       /* the mutex */
    sig_atomic_t please_stop_syncing;
-   unsigned long buffers_queued;		/* evil hack for BTTV-0.8 */
    int software_sync_ready[MJPEG_MAX_BUF];    /* whether the frame has already been synced on */
    pthread_cond_t software_sync_wait[MJPEG_MAX_BUF]; /* wait for frame to be synced on */
    struct timeval software_sync_timestamp[MJPEG_MAX_BUF];
@@ -207,14 +201,23 @@ static void lavrec_msg(int type, lavrec_t *info, const char format[], ...)
 
    va_start(args, format);
    vsnprintf(buf, sizeof(buf)-1, format, args);
-   va_end(args);
 
-   if (!info) /* we can't let errors pass without giving notice */
-      mjpeg_error("%s", buf);
+   if (!info && type == LAVREC_MSG_ERROR)
+   {
+      /* we can't let errors pass without giving notice */
+      printf("**ERROR: %s\n", buf);
+   }
    else if (info->msg_callback)
+   {
       info->msg_callback(type, buf);
+   }
    else if (type == LAVREC_MSG_ERROR)
-      mjpeg_error("%s", buf);
+   {
+      /* we can't let errors pass without giving notice */
+      printf("**ERROR: %s\n", buf);
+   }
+
+   va_end(args);
 }
 
 
@@ -304,21 +307,6 @@ static int lavrec_set_mixer(lavrec_t *info, int flag)
          sound_mixer_read_input  = SOUND_MIXER_READ_LINE;
          sound_mixer_write_input = SOUND_MIXER_WRITE_LINE;
          sound_mask_input        = SOUND_MASK_LINE;
-         break;
-      case '1':
-         sound_mixer_read_input  = SOUND_MIXER_READ_LINE1;
-         sound_mixer_write_input = SOUND_MIXER_WRITE_LINE1;
-         sound_mask_input        = SOUND_MASK_LINE1;
-         break;
-      case '2':
-         sound_mixer_read_input  = SOUND_MIXER_READ_LINE2;
-         sound_mixer_write_input = SOUND_MIXER_WRITE_LINE2;
-         sound_mask_input        = SOUND_MASK_LINE2;
-         break;
-      case '3':
-         sound_mixer_read_input  = SOUND_MIXER_READ_LINE3;
-         sound_mixer_write_input = SOUND_MIXER_WRITE_LINE3;
-         sound_mask_input        = SOUND_MASK_LINE3;
          break;
       default:
          lavrec_msg(LAVREC_MSG_WARNING, info,
@@ -411,14 +399,14 @@ static int lavrec_autodetect_signal(lavrec_t *info)
 
    lavrec_msg(LAVREC_MSG_INFO, info, "Auto detecting input and norm ...");
 
-   if (info->software_encoding && (info->video_norm==3 || info->video_src==-1))
+   if (info->software_encoding && (info->video_norm==3 || info->video_src==3))
    {
       lavrec_msg(LAVREC_MSG_DEBUG, info,
          "Using current input signal settings for non-MJPEG card");
       return 1;
    }
 
-   if (info->video_src == -1) /* detect video_src && norm */
+   if (info->video_src == 3) /* detect video_src && norm */
    {
       int n = 0;
 
@@ -432,7 +420,7 @@ static int lavrec_autodetect_signal(lavrec_t *info)
          {
             lavrec_msg (LAVREC_MSG_ERROR, info,
                "Error getting video input status: %s",
-               (const char*)strerror(errno));
+               (const char*)sys_errlist[errno]);
             return 0;
          }
 
@@ -483,7 +471,7 @@ static int lavrec_autodetect_signal(lavrec_t *info)
       if (ioctl(settings->video_fd,MJPIOC_G_STATUS,&bstat) < 0)
       {
          lavrec_msg (LAVREC_MSG_ERROR, info,
-            "Error getting video input status: %s",strerror(errno));
+            "Error getting video input status: %s",sys_errlist[errno]);
          return 0;
       }
 
@@ -513,7 +501,10 @@ static uint64_t lavrec_get_free_space(video_capture_setup *settings)
 
    /* check the disk space again */
    if (statfs(settings->stats->output_filename, &statfs_buf))
-      MBytes_fs_free = 2047; /* some fake value */
+   {
+      /* some error happened */
+      MBytes_fs_free = MAX_MBYTES_PER_FILE; /* some fake value */
+   }
    else
    {
       blocks_per_MB = (1024*1024) / statfs_buf.f_bsize;
@@ -602,12 +593,6 @@ static int lavrec_output_video_frame(lavrec_t *info, uint8_t *buff, long size, l
    {
       lavrec_msg(LAVREC_MSG_INFO, info,
          "Max filesize reached, opening next output file");
-      OpenNewFlag = 1;
-   }
-   if( info->max_file_frames > 0 &&  settings->stats->num_frames % info->max_file_frames == 0)
-   {
-      lavrec_msg(LAVREC_MSG_INFO, info,
-         "Max number of frames reached, opening next output file");
       OpenNewFlag = 1;
    }
    if (settings->output_status > 0 && settings->MBytes_fs_free < MIN_MBYTES_FREE)
@@ -884,60 +869,6 @@ static int audio_captured(lavrec_t *info, uint8_t *buff, long samps)
    return 1;
 }
 
-static void frame_YUV422_to_planar_42x(uint8_t *output, uint8_t *input,
-                                       int width, int height, int chroma)
-{
-    int i, j, w2;
-    uint8_t *y, *cb, *cr;
-
-    w2 = width/2;
-    y=output;
-    cb=(output + width*height);
-    cr=(output + (3*width*height)/2);
-
-    for (i=0; i<height;) {
-        /* process two scanlines (one from each field, interleaved) */
-        /* ...top-field scanline */
-        for (j=0; j<w2; j++) {
-            /* packed YUV 422 is: Y[i] U[i] Y[i+1] V[i] */
-            *(y++) =  *(input++);
-            *(cb++) = *(input++);
-            *(y++) =  *(input++);
-            *(cr++) = *(input++);
-        }
-        i++;
-        /* ...bottom-field scanline */
-        for (j=0; j<w2; j++) {
-            /* packed YUV 422 is: Y[i] U[i] Y[i+1] V[i] */
-            *(y++) =  *(input++);
-            *(cb++) = *(input++);
-            *(y++) =  *(input++);
-            *(cr++) = *(input++);
-        }
-        i++;
-        if (chroma == Y4M_CHROMA_422)
-          continue;
-        /* process next two scanlines (one from each field, interleaved) */
-        /* ...top-field scanline */
-        for (j=0; j<w2; j++) {
-          /* skip every second line for U and V */
-          *(y++) = *(input++);
-          input++;
-          *(y++) = *(input++);
-          input++;
-        }
-        i++;
-        /* ...bottom-field scanline */
-        for (j=0; j<w2; j++) {
-          /* skip every second line for U and V */
-          *(y++) = *(input++);
-          input++;
-          *(y++) = *(input++);
-          input++;
-        }
-        i++;
-    }
-}
 
 /******************************************************
  * lavrec_encoding_thread()
@@ -953,8 +884,6 @@ static void *lavrec_encoding_thread(void* arg)
    int jpegsize;
    unsigned long current_frame = w_info->encoder_id;
    unsigned long predecessor_frame;
-   uint8_t * source;
-   uint8_t * buffer=NULL;
 
    lavrec_msg(LAVREC_MSG_DEBUG, info,
       "Starting software encoding thread");
@@ -976,10 +905,6 @@ static void *lavrec_encoding_thread(void* arg)
             current_frame);
          pthread_cond_wait(&(settings->buffer_filled[current_frame]),
             &(settings->encoding_mutex));
-         if (settings->please_stop_syncing) {
-            pthread_mutex_unlock(&(settings->encoding_mutex));
-            pthread_exit(NULL);
-         }
       }
       memcpy(&(timestamp[current_frame]), &(settings->bsync.timestamp), sizeof(struct timeval));
 
@@ -989,31 +914,15 @@ static void *lavrec_encoding_thread(void* arg)
 	 pthread_cleanup_push((void (*)(void*))pthread_mutex_lock, &settings->encoding_mutex);
          pthread_mutex_unlock(&(settings->encoding_mutex));
 
-         if( settings->YUVP_convert )
-         {
-              memcpy( settings->YUVP_convert[current_frame].YUVP_buff, settings->YUVP_convert[current_frame].mmap, (info->geometry->h * info->geometry->w * 2) );
-              source=settings->YUV_buff + (info->geometry->h * info->geometry->w * 2)*current_frame;
-              frame_YUV422_to_planar_42x( source, settings->YUVP_convert[current_frame].YUVP_buff, info->geometry->w, info->geometry->h, Y4M_CHROMA_422 );
-         }
-         else
-         {
-              source=settings->YUV_buff+settings->softreq.offsets[current_frame];
-         }
-
-         jpegsize = encode_jpeg_raw(settings->MJPG_buff+current_frame*settings->breq.size,
+         jpegsize = encode_jpeg_raw((unsigned char*)(settings->MJPG_buff+current_frame*settings->breq.size),
             settings->breq.size, info->quality, settings->interlaced,
-            Y4M_CHROMA_422, info->geometry->w, info->geometry->h,
-            source,
-            source+(info->geometry->w*info->geometry->h),
-            source+(info->geometry->w*info->geometry->h*3/2));
+            CHROMA420, info->geometry->w, info->geometry->h,
+            settings->YUV_buff+settings->softreq.offsets[current_frame],
+            settings->YUV_buff+settings->softreq.offsets[current_frame]+(info->geometry->w*info->geometry->h),
+            settings->YUV_buff+settings->softreq.offsets[current_frame]+(info->geometry->w*info->geometry->h*5/4));
 
          if (jpegsize<0)
          {
-            if( buffer != NULL )
-            {
-                 free( buffer );
-                 buffer=NULL;
-            }
             lavrec_msg(LAVREC_MSG_ERROR, info,
                "Error encoding frame to JPEG");
             lavrec_change_state(info, LAVREC_STATE_STOP);
@@ -1052,11 +961,6 @@ static void *lavrec_encoding_thread(void* arg)
 			    jpegsize,
 			    settings->buffer_valid[current_frame]) != 1)
          {
-            if( buffer != NULL )
-            {
-                 free( buffer );
-                 buffer=NULL;
-            }
             lavrec_msg(LAVREC_MSG_ERROR, info,
                "Error writing the frame");
             lavrec_change_state(info, LAVREC_STATE_STOP);
@@ -1064,26 +968,18 @@ static void *lavrec_encoding_thread(void* arg)
          }
       }
 
-#if 0
+
       if (!lavrec_queue_buffer(info, &current_frame))
       {
-         if( buffer != NULL )
-         {
-              free( buffer );
-              buffer=NULL;
-         }
          if (info->files)
             lavrec_close_files_on_error(info);
          lavrec_msg(LAVREC_MSG_ERROR, info,
-            "Error re-queuing buffer: %s", strerror(errno));
+            "Error re-queuing buffer: %s", sys_errlist[errno]);
          lavrec_change_state(info, LAVREC_STATE_STOP);
          pthread_exit(0);
       }
       /* Mark the capture buffer as once again as in progress for capture */
       settings->buffer_valid[current_frame] = -1;
-#endif
-      /* hack for BTTV-0.8 - give it a status that tells us to queue it in another thread */
-      settings->buffer_valid[current_frame] = -2;
 
       if (!lavrec_handle_audio(info, &(timestamp[current_frame])))
          lavrec_change_state(info, LAVREC_STATE_STOP);
@@ -1099,78 +995,10 @@ static void *lavrec_encoding_thread(void* arg)
       pthread_cleanup_pop(1);
    }
 
-   if( buffer != NULL )
-   {
-      free( buffer );
-      buffer=NULL;
-   }
    pthread_exit(NULL);
    return(NULL);
 }
 
-int get_size_offset( int fd, size_t *length, off_t *offset, unsigned int frame )
-{
-	struct v4l2_buffer	buf;
-	int			retval;
-	
-	buf.index=frame;
-	buf.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	retval=ioctl( fd, VIDIOC_QUERYBUF, &buf );
-	if( retval != 0 )
-		return retval;
-
-	*length=buf.length;
-	*offset=buf.m.offset;
-	return 0;
-}
-
-int set_format_part1( int fd, uint16_t width, uint16_t height )
-{
-	struct v4l2_format	format;
-	int			retval;
-
-	memset( &format, 0, sizeof( format ) );
-
-	format.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	retval=ioctl( fd, VIDIOC_G_FMT, &format );
-	if( retval != 0 )
-		return retval;
-
-	format.fmt.pix.width=width;
-	format.fmt.pix.height=height;
-	format.fmt.pix.pixelformat=V4L2_PIX_FMT_YUYV;
-	format.fmt.pix.field=V4L2_FIELD_ANY;
-	format.fmt.pix.bytesperline=0;
-	retval=ioctl( fd, VIDIOC_S_FMT, &format );
-	if( retval != 0 )
-		return retval;
-
-	return 0;
-}
-
-int set_format_part2( int fd, unsigned int frame )
-{
-	struct v4l2_buffer	buf;
-	int			retval;
-	enum v4l2_buf_type	captype=V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	 
-	memset( &buf, 0, sizeof( buf ) );
-	buf.index=frame;
-	buf.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	retval=ioctl( fd, VIDIOC_QUERYBUF, &buf );
-	if( retval != 0 )
-		return retval;
-
-        retval=ioctl(fd, VIDIOC_QBUF, &buf);
-        if( retval != 0 )
-            return retval;
-
-	retval=ioctl( fd, VIDIOC_STREAMON, &captype );
-	if( retval != 0 )
-		return retval;
-
-	return 0;
-}
 
 /******************************************************
  * lavrec_software_init()
@@ -1188,7 +1016,7 @@ static int lavrec_software_init(lavrec_t *info)
    if (ioctl(settings->video_fd, VIDIOCGCAP, &vc) < 0)
    {
       lavrec_msg(LAVREC_MSG_ERROR, info,
-         "Error getting device capabilities: %s", strerror(errno));
+         "Error getting device capabilities: %s", sys_errlist[errno]);
       return 0;
    }
    /* vc.maxwidth is often reported wrong - let's just keep it broken (sigh) */
@@ -1235,23 +1063,23 @@ static int lavrec_software_init(lavrec_t *info)
 
    settings->mm.width = settings->width = info->geometry->w;
    settings->mm.height = settings->height = info->geometry->h;
-   settings->mm.format = VIDEO_PALETTE_YUV422P;
+   settings->mm.format = VIDEO_PALETTE_YUV420P;
 
    if (info->geometry->h > (info->video_norm==1?320:384))
-      settings->interlaced = Y4M_ILACE_TOP_FIRST; /* all interlaced BT8x8 capture seems top-first ?? */
+      settings->interlaced = LAV_INTER_TOP_FIRST; /* all interlaced BT8x8 capture seems top-first ?? */
    else
-      settings->interlaced = Y4M_ILACE_NONE;
+      settings->interlaced = LAV_NOT_INTERLACED;
 
    lavrec_msg(LAVREC_MSG_INFO, info,
       "Image size will be %dx%d, %d field(s) per buffer",
       info->geometry->w, info->geometry->h,
-      (settings->interlaced == Y4M_ILACE_NONE)?1:2);
+      (settings->interlaced==LAV_NOT_INTERLACED)?1:2);
 
    /* request buffer info */
    if (ioctl(settings->video_fd, VIDIOCGMBUF, &(settings->softreq)) < 0)
    {
       lavrec_msg(LAVREC_MSG_ERROR, info,
-         "Error getting buffer information: %s", strerror(errno));
+         "Error getting buffer information: %s", sys_errlist[errno]);
       return 0;
    }
    if (settings->softreq.frames < MIN_QUEUES_NEEDED)
@@ -1265,80 +1093,14 @@ static int lavrec_software_init(lavrec_t *info)
       "Got %d YUV-buffers of size %d KB", settings->softreq.frames,
       settings->softreq.size/(1024*settings->softreq.frames));
 
-   if( info->software_encoding == 2 )
+   /* Map the buffers */
+   settings->YUV_buff = mmap(0, settings->softreq.size, 
+      PROT_READ|PROT_WRITE, MAP_SHARED, settings->video_fd, 0);
+   if (settings->YUV_buff == MAP_FAILED)
    {
-       int   loop;
-       size_t size;
-       off_t  offset;
-       settings->YUVP_convert=(struct YUVP_convert *) malloc( settings->softreq.frames * sizeof( struct YUVP_convert ) );
-       if( settings->YUVP_convert == NULL )
-       {
-           lavrec_msg (LAVREC_MSG_ERROR, info,
-              "Malloc error, you\'re probably out of memory");
-           return 0;
-       }
-       settings->YUVP_convert[0].YUVP_buff=(unsigned char *) malloc( settings->mm.width * settings->mm.height * 2 * settings->softreq.frames );
-       if( settings->YUVP_convert[0].YUVP_buff == NULL )
-       {
-           lavrec_msg (LAVREC_MSG_ERROR, info,
-              "Malloc error for temp buffers, you\'re probably out of memory");
-           free( settings->YUVP_convert );
-           return 0;
-       }
-
-       for( loop=1; loop < settings->softreq.frames; loop++ )
-           settings->YUVP_convert[loop].YUVP_buff=settings->YUVP_convert[0].YUVP_buff + (loop * settings->mm.width * settings->mm.height * 2);
-
-       if( set_format_part1( settings->video_fd, settings->mm.width, settings->mm.height ) )
-       {
-           free( settings->YUVP_convert[0].YUVP_buff );
-           free( settings->YUVP_convert );
-           lavrec_msg( LAVREC_MSG_ERROR, info, "ioctl error on set_format_part1.\n" );
-           return 0;
-       }
-
-       for( loop=0; loop < settings->softreq.frames; loop++ )
-       {
-          if( get_size_offset( settings->video_fd, &size, &offset, loop ) )
-          {
-              lavrec_msg( LAVREC_MSG_ERROR, info, "Can't get mmap settings" );
-              free( settings->YUVP_convert[0].YUVP_buff );
-              free( settings->YUVP_convert );
-              return 0;
-          }
-          settings->YUVP_convert[loop].mmap=mmap( 0, size, PROT_READ|PROT_WRITE, MAP_SHARED, settings->video_fd,
-                                                offset );
-          if( settings->YUVP_convert[loop].mmap == NULL )
-          {
-              lavrec_msg (LAVREC_MSG_ERROR, info,
-                 "Packed YUV mmap error");
-              free( settings->YUVP_convert[0].YUVP_buff );
-              free( settings->YUVP_convert );
-              return 0;
-          }
-       }
-
-       settings->YUV_buff=(uint8_t *) malloc( settings->softreq.size * info->num_encoders );
-       if( settings->YUV_buff == NULL )
-       {
-           free( settings->YUVP_convert[0].YUVP_buff );
-           free( settings->YUVP_convert );
-           lavrec_msg( LAVREC_MSG_ERROR, info, "malloc error on YUV_buff.\n" );
-           return 0;
-       }
-   }
-   else
-   {
-       settings->YUVP_convert=NULL;
-       /* Map the buffers */
-       settings->YUV_buff = mmap(0, settings->softreq.size, 
-          PROT_READ|PROT_WRITE, MAP_SHARED, settings->video_fd, 0);
-       if (settings->YUV_buff == MAP_FAILED)
-       {
-          lavrec_msg(LAVREC_MSG_ERROR, info,
-             "Error mapping video buffers: %s", strerror(errno));
-          return 0;
-       }
+      lavrec_msg(LAVREC_MSG_ERROR, info,
+         "Error mapping video buffers: %s", sys_errlist[errno]);
+      return 0;
    }
 
    /* set up buffers for software encoding thread */
@@ -1366,11 +1128,6 @@ static int lavrec_software_init(lavrec_t *info)
    settings->MJPG_buff = (uint8_t *) malloc(sizeof(uint8_t)*settings->breq.size*settings->breq.count);
    if (!settings->MJPG_buff)
    {
-      if( settings->YUVP_convert )
-      {
-        free( settings->YUVP_convert[0].YUVP_buff );
-	free( settings->YUVP_convert );
-      }
       lavrec_msg (LAVREC_MSG_ERROR, info,
          "Malloc error, you\'re probably out of memory");
       return 0;
@@ -1412,7 +1169,7 @@ static int lavrec_hardware_init(lavrec_t *info)
    if (ioctl(settings->video_fd, VIDIOCGCAP, &vc) < 0)
    {
       lavrec_msg(LAVREC_MSG_ERROR, info,
-         "Error getting device capabilities: %s", strerror(errno));
+         "Error getting device capabilities: %s", sys_errlist[errno]);
       return 0;
    }
    /* vc.maxwidth is often reported wrong - let's just keep it broken (sigh) */
@@ -1422,7 +1179,7 @@ static int lavrec_hardware_init(lavrec_t *info)
    if (ioctl(settings->video_fd, MJPIOC_G_PARAMS, &bparm) < 0)
    {
       lavrec_msg(LAVREC_MSG_ERROR, info,
-         "Error getting video parameters: %s", strerror(errno));
+         "Error getting video parameters: %s", sys_errlist[errno]);
       return 0;
    }
    bparm.input = info->video_src;
@@ -1432,7 +1189,7 @@ static int lavrec_hardware_init(lavrec_t *info)
    /* Set decimation and image geometry params - only if we have weird options */
    if (info->geometry->x != VALUE_NOT_FILLED ||
       info->geometry->y != VALUE_NOT_FILLED ||
-      (info->geometry->h != 0 && info->geometry->h != (info->video_norm==1 ? 480 : 576)) ||
+      (info->geometry->h != 0 && info->geometry->h != info->video_norm==1 ? 480 : 576) ||
       (info->geometry->w != 0 && info->geometry->w != vc.maxwidth) ||
       info->horizontal_decimation != info->vertical_decimation)
    {
@@ -1515,14 +1272,14 @@ static int lavrec_hardware_init(lavrec_t *info)
 
       /* There seems to be some confusion about what is the even and odd field ... */
       /* madmac: 20010810: According to Ronald, this is wrong - changed now to EVEN */
-      bparm.odd_even = lav_query_polarity(info->video_format) == Y4M_ILACE_TOP_FIRST;
+      bparm.odd_even = lav_query_polarity(info->video_format) == LAV_INTER_TOP_FIRST;
       for(n=0; n<bparm.APP_len && n<60; n++) bparm.APP_data[n] = 0;
    }
 
    if (ioctl(settings->video_fd, MJPIOC_S_PARAMS, &bparm) < 0)
    {
       lavrec_msg(LAVREC_MSG_ERROR, info,
-         "Error setting video parameters: %s", strerror(errno));
+         "Error setting video parameters: %s", sys_errlist[errno]);
       return 0;
    }
 
@@ -1540,7 +1297,7 @@ static int lavrec_hardware_init(lavrec_t *info)
    if (ioctl(settings->video_fd, MJPIOC_REQBUFS,&(settings->breq)) < 0)
    {
       lavrec_msg(LAVREC_MSG_ERROR, info,
-         "Error requesting video buffers: %s", strerror(errno));
+         "Error requesting video buffers: %s", sys_errlist[errno]);
       return 0;
    }
    lavrec_msg(LAVREC_MSG_INFO, info,
@@ -1552,7 +1309,7 @@ static int lavrec_hardware_init(lavrec_t *info)
    if (settings->MJPG_buff == MAP_FAILED)
    {
       lavrec_msg(LAVREC_MSG_ERROR, info,
-         "Error mapping video buffers: %s", strerror(errno));
+         "Error mapping video buffers: %s", sys_errlist[errno]);
       return 0;
    }
 
@@ -1576,15 +1333,17 @@ static int lavrec_init(lavrec_t *info)
    /* are there files to capture to? */
    if (info->files) /* yes */
    {
-/*
- * If NO filesize limit was specifically given then allow unlimited size.
- * ODML extensions will handle the AVI files and Quicktime has had 64bit
- * filesizes for a long time
-*/
+      /* Handle the limitations of AVI that can only do MAX 2G Byte files */
       if (info->max_file_size_mb < 0)
-         info->max_file_size_mb = MAX_MBYTES_PER_FILE_64;
+      {
+         if( info->video_format == 'a' || info->video_format == 'A' )
+            info->max_file_size_mb = MAX_MBYTES_PER_FILE_32;
+         else
+            info->max_file_size_mb = MAX_MBYTES_PER_FILE;
+      }
       lavrec_msg(LAVREC_MSG_DEBUG, info,
-         "Maximum size per file will be %d MB", info->max_file_size_mb);
+         "Maximum size per file will be %d MB",
+         info->max_file_size_mb);
 
       if (info->video_captured || info->audio_captured)
       {
@@ -1644,7 +1403,7 @@ static int lavrec_init(lavrec_t *info)
       {
          lavrec_msg(LAVREC_MSG_ERROR, info,
             "Failed to set effective user-ID: %s",
-            strerror(errno));
+            sys_errlist[errno]);
          return 0;
       }
    }
@@ -1655,7 +1414,7 @@ static int lavrec_init(lavrec_t *info)
    {
       lavrec_msg(LAVREC_MSG_ERROR, info,
          "Error opening video-device (%s): %s",
-         info->video_dev, strerror(errno));
+         info->video_dev, sys_errlist[errno]);
       return 0;
    }
 
@@ -1663,24 +1422,24 @@ static int lavrec_init(lavrec_t *info)
    if (lavrec_autodetect_signal(info) == 0)
       return 0;
 
-   if (info->software_encoding && info->video_src == -1)
+   if (info->software_encoding && info->video_src == 3)
       vch.channel = 0;
    else
       vch.channel = info->video_src;
    vch.norm = info->video_norm;
-   if (info->video_norm != 3 && info->video_src != -1)
+   if (info->video_norm != 3 && info->video_src != 3)
    {
       if (ioctl(settings->video_fd, VIDIOCSCHAN, &vch) < 0)
       {
          lavrec_msg(LAVREC_MSG_ERROR, info,
-            "Error setting channel: %s", strerror(errno));
+            "Error setting channel: %s", sys_errlist[errno]);
          return 0;
       }
    }
    if (ioctl(settings->video_fd, VIDIOCGCHAN, &vch) < 0)
    {
       lavrec_msg(LAVREC_MSG_ERROR, info,
-         "Error getting channel info: %s", strerror(errno));
+         "Error getting channel info: %s", sys_errlist[errno]);
       return 0;
    }
    settings->has_audio = (vch.flags & VIDEO_VC_AUDIO);
@@ -1694,7 +1453,7 @@ static int lavrec_init(lavrec_t *info)
       if (ioctl(settings->video_fd, VIDIOCSFREQ, &outfreq) < 0)
       {
          lavrec_msg(LAVREC_MSG_ERROR, info,
-            "Error setting tuner frequency: %s", strerror(errno));
+            "Error setting tuner frequency: %s", sys_errlist[errno]);
          return 0;
       }
    }
@@ -1710,7 +1469,7 @@ static int lavrec_init(lavrec_t *info)
       if (ioctl(settings->video_fd,VIDIOCGAUDIO, &vau) < 0)
       {
          lavrec_msg(LAVREC_MSG_ERROR, info,
-            "Error getting tuner audio params: %s", strerror(errno));
+            "Error getting tuner audio params: %s", sys_errlist[errno]);
          return 0;
       }
       /* unmute so we get sound to record
@@ -1722,7 +1481,7 @@ static int lavrec_init(lavrec_t *info)
       if (ioctl(settings->video_fd,VIDIOCSAUDIO, &vau) < 0)
       {
          lavrec_msg(LAVREC_MSG_INFO, info,
-            "Error setting tuner audio params: %s", strerror(errno));
+            "Error setting tuner audio params: %s", sys_errlist[errno]);
          return 0;
       }
    }
@@ -1846,21 +1605,12 @@ static int lavrec_queue_buffer(lavrec_t *info, unsigned long *num)
       }
       pthread_mutex_unlock(&(settings->queue_mutex));
 
-      if( info->software_encoding == 2 )
-      {
-          if( set_format_part2( settings->video_fd, *num ) )
-              return 0;
-      }
-      else
-      {
-          if (ioctl(settings->video_fd, VIDIOCMCAPTURE, &(settings->mm)) < 0)
-             return 0;
-      }
+      if (ioctl(settings->video_fd, VIDIOCMCAPTURE, &(settings->mm)) < 0)
+         return 0;
 
       pthread_mutex_lock(&(settings->queue_mutex));
       settings->queue_left++;
       settings->is_queued[*num] = 1;
-      settings->buffers_queued++;
       pthread_cond_broadcast(&(settings->queue_wait));
       pthread_mutex_unlock(&(settings->queue_mutex));
    }
@@ -1884,9 +1634,6 @@ static void *lavrec_software_sync_thread(void* arg)
    lavrec_t *info = (lavrec_t *) arg;
    video_capture_setup *settings = (video_capture_setup *)info->settings;
    int frame = 0; /* framenum to sync on */
-#if 1
-   unsigned long qframe, i;
-#endif
 
    /* Allow easy shutting down by other processes... */
    /* PTHREAD_CANCEL_ASYNCHRONOUS is evil
@@ -1902,94 +1649,36 @@ static void *lavrec_software_sync_thread(void* arg)
 
    while (1)
    {
-      /* evil hack for BTTV-0.8 - we need to queue frames here */
-      /* this cycle is non-onbligatory - we just queue frames as they become available,
-       * below, we'll wait for queues if we don't have enough of them */
-      for (i=0;i<settings->softreq.frames;i++)
-      {
-         qframe = settings->buffers_queued % settings->softreq.frames;
-         if (settings->buffer_valid[qframe] == -2)
-         {
-            if (!lavrec_queue_buffer(info, &qframe))
-            {
-               pthread_mutex_lock(&(settings->software_sync_mutex));
-               settings->software_sync_ready[qframe] = -1;
-               pthread_cond_broadcast(&(settings->software_sync_wait[qframe]));
-               pthread_mutex_unlock(&(settings->software_sync_mutex));
-               lavrec_msg(LAVREC_MSG_ERROR, info,
-                  "Error re-queueing a buffer (%lu): %s", qframe, strerror(errno));
-               lavrec_change_state(info, LAVREC_STATE_STOP);
-               pthread_exit(0);
-            }
-            settings->buffer_valid[qframe] = -1;
-         }
-         else
-            break;
-      }
-
-      pthread_mutex_lock(&(settings->encoding_mutex));
+      pthread_mutex_lock(&(settings->queue_mutex));
       while (settings->queue_left < MIN_QUEUES_NEEDED)
       {
 	 if (settings->is_queued[frame] <= 0 ||
              settings->please_stop_syncing)
             break; /* sync on all remaining frames */
-#if 0
          lavrec_msg(LAVREC_MSG_DEBUG, info,
             "Software sync thread: sleeping for new queues (%d)", frame);
          pthread_cond_wait(&(settings->queue_wait),
             &(settings->queue_mutex));
-#else
-         /* sleep for new buffers to be completed encoding. After that,
-          * requeue them so we have more than MIN_QUEUES_NEEDED buffers
-          * free */
-         qframe = settings->buffers_queued % settings->softreq.frames;
-         lavrec_msg(LAVREC_MSG_DEBUG, info,
-            "Software sync thread: sleeping for new queues (%lu) to become available", qframe);
-         while (settings->buffer_valid[qframe] != -2)
-         {
-            pthread_cond_wait(&(settings->buffer_completion[qframe]),
-               &(settings->encoding_mutex));
-            if (settings->please_stop_syncing) {
-               pthread_mutex_unlock(&(settings->encoding_mutex));
-               pthread_exit(0);
-            }
-         }
-         if (!lavrec_queue_buffer(info, &qframe))
-         {
-            pthread_mutex_unlock(&(settings->encoding_mutex));
-            pthread_mutex_lock(&(settings->software_sync_mutex));
-            settings->software_sync_ready[qframe] = -1;
-            pthread_cond_broadcast(&(settings->software_sync_wait[qframe]));
-            pthread_mutex_unlock(&(settings->software_sync_mutex));
-            lavrec_msg(LAVREC_MSG_ERROR, info,
-               "Error re-queueing a buffer (%lu): %s", qframe, strerror(errno));
-            lavrec_change_state(info, LAVREC_STATE_STOP);
-            pthread_exit(0);
-         }
-         settings->buffer_valid[qframe] = -1;
-#endif
       }
-
       if (!settings->queue_left)
       {
 	 lavrec_msg(LAVREC_MSG_DEBUG, info,
 		    "Software sync thread stopped");
-	 pthread_mutex_unlock(&settings->encoding_mutex);
+	 pthread_mutex_unlock(&settings->queue_mutex);
 	 pthread_exit(NULL);
       }
-      pthread_mutex_unlock(&settings->encoding_mutex);
+      pthread_mutex_unlock(&settings->queue_mutex);
       
 retry:
       if (ioctl(settings->video_fd, VIDIOCSYNC, &frame) < 0)
       {
-         if( errno==EINTR && info->software_encoding )
-		goto retry; /* BTTV sync got interrupted */
+         if (errno==EINTR && info->software_encoding) goto retry; /* BTTV sync got interrupted */
          pthread_mutex_lock(&(settings->software_sync_mutex));
          settings->software_sync_ready[frame] = -1;
          pthread_cond_broadcast(&(settings->software_sync_wait[frame]));
          pthread_mutex_unlock(&(settings->software_sync_mutex));
          lavrec_msg(LAVREC_MSG_ERROR, info,
-            "Error syncing on a buffer: %s", strerror(errno));
+            "Error syncing on a buffer: %s", sys_errlist[errno]);
          lavrec_change_state(info, LAVREC_STATE_STOP);
          pthread_exit(0);
       }
@@ -2174,12 +1863,10 @@ static void lavrec_record(lavrec_t *info)
       for (x=0;x<MJPEG_MAX_BUF;x++)
       {
          settings->is_queued[x] = 0;
-         settings->buffer_valid[x] = -1; /* 0 means to just omit the frame, -1 means "in progress",
-						-2 is an evil hack for BTTV-0.8 */
+         settings->buffer_valid[x] = -1; /* 0 means to just omit the frame, -1 means "in progress" */
          settings->buffer_completed[x] = 1; /* 1 means compression and writing completed,
                                                0 means in progress */
       }
-      settings->buffers_queued = 0;
 
       if( !(settings->encoders = malloc(info->num_encoders * sizeof(encoder_info_t))) )
       {
@@ -2216,7 +1903,7 @@ static void lavrec_record(lavrec_t *info)
       if (!lavrec_queue_buffer(info, &frame_cnt))
       {
          lavrec_msg(LAVREC_MSG_ERROR, info,
-            "Error queuing buffers: %s", strerror(errno));
+            "Error queuing buffers: %s", sys_errlist[errno]);
          lavrec_change_state(info, LAVREC_STATE_STOP);
          return;
       }
@@ -2269,7 +1956,7 @@ static void lavrec_record(lavrec_t *info)
          if (info->files)
             lavrec_close_files_on_error(info);
          lavrec_msg(LAVREC_MSG_ERROR, info,
-            "Error syncing on a buffer: %s", strerror(errno));
+            "Error syncing on a buffer: %s", sys_errlist[errno]);
          nerr++;
       }
       stats.num_syncs++;
@@ -2361,7 +2048,7 @@ static void lavrec_record(lavrec_t *info)
             if (info->files)
                lavrec_close_files_on_error(info);
             lavrec_msg(LAVREC_MSG_ERROR, info,
-               "Error re-queuing buffer: %s", strerror(errno));
+               "Error re-queuing buffer: %s", sys_errlist[errno]);
             nerr++;
          }
 
@@ -2375,11 +2062,10 @@ static void lavrec_record(lavrec_t *info)
 
    if (info->software_encoding)
    {
-      pthread_mutex_lock(&settings->encoding_mutex);
+      pthread_mutex_lock(&settings->queue_mutex);
       settings->please_stop_syncing = 1; /* Ask the software sync thread to stop */
-      for (x=0;x<settings->softreq.frames;x++)
-        pthread_cond_broadcast(&settings->buffer_completion[x]);
-      pthread_mutex_unlock(&settings->encoding_mutex);
+      pthread_cond_broadcast(&settings->queue_wait);
+      pthread_mutex_unlock(&settings->queue_mutex);
       
       for (x = 0; x < info->num_encoders; x++)
       {
@@ -2407,7 +2093,7 @@ static void lavrec_record(lavrec_t *info)
       if (ioctl(settings->video_fd, MJPIOC_QBUF_CAPT, &x) < 0)
       {
          lavrec_msg(LAVREC_MSG_ERROR, info,
-            "Error resetting buffer-queue: %s", strerror(errno));
+            "Error resetting buffer-queue: %s", sys_errlist[errno]);
       }
    }
 }
@@ -2476,7 +2162,7 @@ static void *lavrec_capture_thread(void *arg)
       if (ioctl(settings->video_fd,VIDIOCSAUDIO,&vau) < 0)
       {
          lavrec_msg(LAVREC_MSG_ERROR, info,
-            "Error resetting tuner audio params: %s", strerror(errno));
+            "Error resetting tuner audio params: %s", sys_errlist[errno]);
       }
    }
 
@@ -2515,7 +2201,7 @@ lavrec_t *lavrec_malloc(void)
    /* let's set some default values now */
    info->video_format = '\0';
    info->video_norm = 3;
-   info->video_src = -1;
+   info->video_src = 3;
    info->software_encoding = 0;
    info->num_encoders = 0; /* this should be set to the number of processors */
    info->horizontal_decimation = 4;
@@ -2612,13 +2298,6 @@ int lavrec_main(lavrec_t *info)
    int ret;
    struct sched_param schedparam;
 
-   /* Flush the Linux File buffers to disk */
-   sync();
-
-   /* start with initing */
-   if (!lavrec_init(info))
-      return 0;
-
    /* Now we're ready to go move to Real-time scheduling... */
    schedparam.sched_priority = 1;
    if(setpriority(PRIO_PROCESS, 0, -15)) { /* Give myself maximum priority */ 
@@ -2629,6 +2308,13 @@ int lavrec_main(lavrec_t *info)
       lavrec_msg(LAVREC_MSG_WARNING, info,
          "Pthread Real-time scheduling for main thread could not be enabled"); 
    }
+
+   /* Flush the Linux File buffers to disk */
+   sync();
+
+   /* start with initing */
+   if (!lavrec_init(info))
+      return 0;
 
    /* now, set state to pause and catch audio until started */
    /* lavrec_change_state(info, LAVREC_STATE_PAUSED); */

@@ -17,26 +17,21 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
+#ifdef HAVE_ALTIVEC_H
+#include <altivec.h>
 #endif
-#include "cpu_accel.h"
 
 #include "altivec_quantize.h"
-#include "vectorize.h"
 #include "../mjpeg_logging.h"
 
-void enable_altivec_quantization(struct QuantizerCalls *calls, int opt_mpeg1)
-    {
-    int d_quant_nonintra, d_weight_intra, d_weight_nonintra, d_iquant_intra;
-    int d_iquant_nonintra;
 
-    d_quant_nonintra = disable_simd("quant_nonintra");
-    d_weight_intra = disable_simd("quant_weight_intra");
-    d_weight_nonintra = disable_simd("quant_weight_nonintra");
-    d_iquant_intra = disable_simd("iquant_intra");
-    d_iquant_nonintra = disable_simd("iquant_nonintra");
+extern int (*pquant_non_intra)(pict_data_s *picture, int16_t *src, int16_t *dst,
+                               int mquant, int *nonsat_mquant);
+extern int (*pquant_weight_coeff_sum)(int16_t *blk, uint16_t*i_quant_mat );
 
+
+void enable_altivec_quantization()
+{
 #if ALTIVEC_TEST_QUANTIZE
 #  if defined(ALTIVEC_BENCHMARK)
     mjpeg_info("SETTING AltiVec BENCHMARK for QUANTIZER!");
@@ -48,65 +43,14 @@ void enable_altivec_quantization(struct QuantizerCalls *calls, int opt_mpeg1)
 #endif
 
 #if ALTIVEC_TEST_FUNCTION(quant_non_intra)
-    calls->pquant_non_intra = ALTIVEC_TEST_SUFFIX(quant_non_intra);
+    pquant_non_intra = ALTIVEC_TEST_SUFFIX(quant_non_intra);
 #else
-    if (d_quant_nonintra == 0)
-        calls->pquant_non_intra = quant_non_intra_altivec;
+    pquant_non_intra = ALTIVEC_SUFFIX(quant_non_intra);
 #endif
 
-#if ALTIVEC_TEST_FUNCTION(quant_weight_coeff_intra)
-    calls->pquant_weight_coeff_intra = ALTIVEC_TEST_SUFFIX(quant_weight_coeff_intra);
+#if ALTIVEC_TEST_FUNCTION(quant_weight_coeff_sum)
+    pquant_weight_coeff_sum = ALTIVEC_TEST_SUFFIX(quant_weight_coeff_sum);
 #else
-    if (d_weight_intra == 0)
-       calls->pquant_weight_coeff_intra = quant_weight_coeff_intra_altivec;
+    pquant_weight_coeff_sum = ALTIVEC_SUFFIX(quant_weight_coeff_sum);
 #endif
-
-#if ALTIVEC_TEST_FUNCTION(quant_weight_coeff_inter)
-    calls->pquant_weight_coeff_inter = ALTIVEC_TEST_SUFFIX(quant_weight_coeff_inter);
-#else
-    if (d_weight_nonintra == 0)
-        calls->pquant_weight_coeff_inter = quant_weight_coeff_inter_altivec;
-#endif
-
-    if  (opt_mpeg1)
-        {
-#if ALTIVEC_TEST_FUNCTION(iquant_non_intra_m1)
-	calls->piquant_non_intra = ALTIVEC_TEST_SUFFIX(iquant_non_intra_m1);
-#else
-        if (d_iquant_nonintra == 0)
-	    calls->piquant_non_intra = iquant_non_intra_m1_altivec;
-#endif
-#if ALTIVEC_TEST_FUNCTION(iquant_intra_m1)
-	calls->piquant_intra = ALTIVEC_TEST_SUFFIX(iquant_intra_m1);
-#else
-         if (d_iquant_intra == 0)
-	    calls->piquant_intra = iquant_intra_m1_altivec;
-#endif
-         }
-     else
-         {
-#if ALTIVEC_TEST_FUNCTION(iquant_non_intra_m2)
-	calls->piquant_non_intra = ALTIVEC_TEST_SUFFIX(iquant_non_intra_m2);
-#else
-        if (d_iquant_nonintra == 0)
-	   calls->piquant_non_intra = iquant_non_intra_m2_altivec;
-#endif
-#if ALTIVEC_TEST_FUNCTION(iquant_intra_m2)
-	calls->piquant_intra = ALTIVEC_TEST_SUFFIX(iquant_intra_m2);
-#else
-        if (d_iquant_intra == 0)
-	   calls->piquant_intra = iquant_intra_m2_altivec;
-#endif
-        }
-
-    if (d_quant_nonintra)
-       mjpeg_info(" Disabling quant_non_intra");
-    if (d_iquant_intra)
-       mjpeg_info(" Disabling iquant_intra");
-    if (d_iquant_nonintra)
-       mjpeg_info(" Disabling iquant_nonintra");
-    if (d_weight_intra)
-       mjpeg_info(" Disabling quant_weight_intra");
-    if (d_weight_nonintra)
-        mjpeg_info(" Disabling quant_weight_nonintra");
-    }
+}

@@ -17,8 +17,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
+#ifdef HAVE_ALTIVEC_H
+#include <altivec.h>
 #endif
 
 #include "altivec_motion.h"
@@ -27,11 +27,6 @@
 
 /* #define AMBER_ENABLE */
 #include "amber.h"
-
-#ifdef HAVE_ALTIVEC_H
-/* include last to ensure AltiVec type semantics, especially for bool. */
-#include <altivec.h>
-#endif
 
 
 /*
@@ -86,14 +81,15 @@ int sumsq_sub22_altivec(SUMSQ_SUB22_PDECL)
     } vo;
 
 #ifdef ALTIVEC_VERIFY
-    if (NOT_VECTOR_ALIGNED(rowstride))
-	mjpeg_error_exit1("sumsq_sub22: rowstride %% 16 != 0, (%d)", rowstride);
     if (((unsigned long)blk2 % 8) != 0)
 	mjpeg_error_exit1("sumsq_sub22: blk2 %% 8 != 0, (0x%X)", blk2);
-#endif
+
+    if (NOT_VECTOR_ALIGNED(rowstride))
+	mjpeg_error_exit1("sumsq_sub22: rowstride %% 16 != 0, (%d)", rowstride);
 
     if (h != 4 && h != 8)
 	mjpeg_error_exit1("sumsq_sub22: h != [4|8], (%d)", h);
+#endif
 
     /* 8*h blocks calculated in 8*2 chunks */
     /* align8x2 = 0x( 00 01 02 03 04 05 06 07 10 11 12 13 14 15 16 17 ) {{{ */

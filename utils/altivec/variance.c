@@ -17,8 +17,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
+#ifdef HAVE_ALTIVEC_H
+#include <altivec.h>
 #endif
 
 #include "altivec_motion.h"
@@ -28,19 +28,13 @@
 /* #define AMBER_ENABLE */
 #include "amber.h"
 
-#ifdef HAVE_ALTIVEC_H
-/* include last to ensure AltiVec type semantics, especially for bool. */
-#include <altivec.h>
-#endif
-
 
 #undef HANDLE_ALL
 
 
-#define VARIANCE_PDECL uint8_t *p, int size, int rowstride, \
-                       unsigned int *p_var, unsigned int *p_mean
-#define VARIANCE_ARGS p, size, rowstride, p_var, p_mean
-#define VARIANCE_PFMT "p=0x%X, size=%d, rowstride=%d, p_var=0x%X, p_mean=0x%X"
+#define VARIANCE_PDECL uint8_t *p, int size, int rowstride
+#define VARIANCE_ARGS p, size, rowstride
+#define VARIANCE_PFMT "p=0x%X, size=%d, rowstride=%d"
 
 /*
  * variance of a (size*size) block, multiplied by 256
@@ -48,9 +42,10 @@
  * rowstride: distance (in bytes) of vertically adjacent pels
  * SIZE is a multiple of 8.
  */
-void variance_altivec(VARIANCE_PDECL)
+int variance_altivec(VARIANCE_PDECL)
 {
     unsigned int s, s2, sz;
+    int var;
 #ifdef ALTIVEC_DST
     unsigned int dst;
 #endif
@@ -67,18 +62,22 @@ void variance_altivec(VARIANCE_PDECL)
 	} s;
     } vo;
 
-#ifdef ALTIVEC_VERIFY
-    if (size == 16 && NOT_VECTOR_ALIGNED(p))
-	mjpeg_error_exit1("variance: size == 16 && p %% 16 != 0 (0x%X)", p);
-    if (NOT_VECTOR_ALIGNED(rowstride))
-	mjpeg_error_exit1("variance: rowstride %% 16 != 0, (%d)", rowstride);
+#ifdef ALTIVEC_VERIFY /* {{{ */
     if ((((unsigned long)p) & 0x7) != 0)
 	mjpeg_error_exit1("variance: p %% 8 != 0, (0x%X)", p);
+
     if ((size & 0x7) != 0)
 	mjpeg_error_exit1("variance: size %% 8 != 0, (%d)", size);
+
+    if (size == 16 && NOT_VECTOR_ALIGNED(p))
+	mjpeg_error_exit1("variance: size == 16 && p %% 16 != 0 (0x%X)", p);
+
+    if (NOT_VECTOR_ALIGNED(rowstride))
+	mjpeg_error_exit1("variance: rowstride %% 16 != 0, (%d)", rowstride);
+
     if (rowstride & (~0xffff) != 0)
 	mjpeg_error_exit1("variance: rowstride > vec_dst range", rowstride);
-#endif
+#endif /* }}} */
 
     AMBER_START;
 
@@ -193,8 +192,8 @@ void variance_altivec(VARIANCE_PDECL)
     }
 #endif
 
-    sum = vs16(vec_sum4s(sum, vs32(zero)));
-    sum = vs16(vec_sums(vs32(sum), vs32(zero)));
+    vs32(sum) = vec_sum4s(sum, vs32(zero));
+    vs32(sum) = vec_sums(vs32(sum), vs32(zero));
     msum = vec_sums(msum, vs32(zero));
 
 #ifdef ALTIVEC_DST
@@ -206,37 +205,14 @@ void variance_altivec(VARIANCE_PDECL)
     s = vo.s.sum;
     s2 = vo.s.msum;
 
-    /* var = s2 - ((s * s) >> sz); */ /* ((s*s)/(size*size)) size=8|16 */
-
-    *p_var = s2 - ((s * s) >> sz); /* ((s*s)/(size*size)) size=8|16 */
-    *p_mean = s >> sz;             /* (s/(size*size))     size=8|16 */
+    var = s2 - ((s * s) >> sz); /* ((s*s)/(size*size)) size=8|16 */
 
     AMBER_STOP;
+
+    return var;
 }
 
 #if ALTIVEC_TEST_FUNCTION(variance)
-#  ifdef ALTIVEC_VERIFY
-void variance_altivec_verify(VARIANCE_PDECL)
-{
-  unsigned int c_var, c_mean;
-  unsigned int v_var, v_mean;
-
-  ALTIVEC_TEST_WITH(variance)(p, size, rowstride, &c_var, &c_mean);
-  variance_altivec(p, size, rowstride, &v_var, &v_mean);
-
-  if (v_var != c_var)
-    mjpeg_debug("*p_var: %d != %d variance(" VARIANCE_PFMT ")",
-	v_var, c_var, VARIANCE_ARGS);
-
-  if (v_mean != c_mean)
-    mjpeg_debug("*p_mean: %d != %d variance(" VARIANCE_PFMT ")",
-	v_mean, c_mean, VARIANCE_ARGS);
-
-  *p_var = c_var;
-  *p_mean = c_mean;
-}
-#  else
-ALTIVEC_TEST(variance, void, (VARIANCE_PDECL), VARIANCE_PFMT, VARIANCE_ARGS);
-#  endif
+ALTIVEC_TEST(variance, int, (VARIANCE_PDECL), VARIANCE_PFMT, VARIANCE_ARGS);
 #endif
 /* vim:set foldmethod=marker foldlevel=0: */

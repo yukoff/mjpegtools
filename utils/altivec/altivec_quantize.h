@@ -17,56 +17,23 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#include <stdio.h>  /* FILE required by global.h */
 #include <stdint.h>
-#include "../../mpeg2enc/quantize_ref.h" /* next_larger_quant */
+#include "../../mpeg2enc/mpeg2enc.h" /* pict_data_s */
 
 #include "altivec_conf.h"
 
+void enable_altivec_quantization();
 
 #define ALTIVEC_TEST_QUANTIZE /* {{{ */                                      \
     ( ( defined(ALTIVEC_BENCHMARK) || defined(ALTIVEC_VERIFY) ) &&           \
       ( ALTIVEC_TEST_FUNCTION(quant_non_intra) ||                            \
-        ALTIVEC_TEST_FUNCTION(quant_weight_coeff_intra) ||                   \
-        ALTIVEC_TEST_FUNCTION(quant_weight_coeff_inter) ||                   \
-        ALTIVEC_TEST_FUNCTION(iquant_non_intra_m1) ||                        \
-        ALTIVEC_TEST_FUNCTION(iquant_non_intra_m2) ||                        \
-        ALTIVEC_TEST_FUNCTION(iquant_intra_m1) ||                            \
-        ALTIVEC_TEST_FUNCTION(iquant_intra_m2) ) )                           \
+        ALTIVEC_TEST_FUNCTION(quant_wieght_coeff_sum) ) )                    \
     /* }}} */
 
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-void enable_altivec_quantization(struct QuantizerCalls *calls, int opt_mpeg1);
-
 ALTIVEC_FUNCTION(quant_non_intra, int,
-	(struct QuantizerWorkSpace *wsp, int16_t *src, int16_t *dst,
-	 int q_scale_type, int dctsatlim, int *nonsat_mquant));
+	(pict_data_s *picture, int16_t *src, int16_t *dst,
+	 int mquant, int *nonsat_mquant));
 
-ALTIVEC_FUNCTION(quant_weight_coeff_intra, int,
-	(struct QuantizerWorkSpace *wsp, int16_t *blk));
-
-ALTIVEC_FUNCTION(quant_weight_coeff_inter, int,
-	(struct QuantizerWorkSpace *wsp, int16_t *blk));
-
-ALTIVEC_FUNCTION(iquant_non_intra_m1, void,
-	(struct QuantizerWorkSpace *wsp,
-	 int16_t *src, int16_t *dst, int mquant));
-
-ALTIVEC_FUNCTION(iquant_non_intra_m2, void,
-	(struct QuantizerWorkSpace *wsp,
-	 int16_t *src, int16_t *dst, int mquant));
-
-ALTIVEC_FUNCTION(iquant_intra_m1, void,
-	(struct QuantizerWorkSpace *wsp,
-	 int16_t *src, int16_t *dst, int dc_prec, int mquant));
-
-ALTIVEC_FUNCTION(iquant_intra_m2, void,
-	(struct QuantizerWorkSpace *wsp,
-	 int16_t *src, int16_t *dst, int dc_prec, int mquant));
-
-#ifdef __cplusplus
-}
-#endif
+ALTIVEC_FUNCTION(quant_weight_coeff_sum, int,
+	(int16_t *blk, uint16_t *i_quant_mat));

@@ -17,30 +17,28 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
+#ifdef HAVE_ALTIVEC_H
+#include <altivec.h>
+#endif
+
+#ifdef ALTIVEC_VERIFY
+#  if ALTIVEC_TEST_FUNCTION(quant_non_intra))
+#    include <stdlib.h>
+#  endif
 #endif
 
 #include "altivec_quantize.h"
-
-#if defined(ALTIVEC_VERIFY) && ALTIVEC_TEST_FUNCTION(quant_non_intra)
-#include <stdlib.h>
-#include <string.h>
-#endif
-
 #include "vectorize.h"
-#include <math.h>
+#include "../fastintfns.h"
 #include "../mjpeg_logging.h"
-#include "../../mpeg2enc/syntaxconsts.h"
-#include "../../mpeg2enc/quantize_precomp.h"
 
 /* #define AMBER_ENABLE */
 #include "amber.h"
 
-#ifdef HAVE_ALTIVEC_H
-/* include last to ensure AltiVec type semantics, especially for bool. */
-#include <altivec.h>
-#endif
+
+extern uint16_t *opt_inter_q;
+extern int opt_dctsatlim;
+extern int block_count;
 
 
 /*
@@ -52,24 +50,17 @@
  */
 
 #define QUANT_NON_INTRA_PDECL                                                \
-    struct QuantizerWorkSpace *wsp,                                          \
+    pict_data_s *picture,                                                    \
     int16_t *src, int16_t *dst,                                              \
-    int q_scale_type, int dctsatlim, int *nonsat_mquant                      \
+    int mquant, int *nonsat_mquant                                           \
 
-#define QUANT_NON_INTRA_ARGS \
-    wsp, src, dst, q_scale_type, dctsatlim, nonsat_mquant
-
-#define QUANT_NON_INTRA_PFMT \
-    "wsp=0x%X, src=0x%X, dst=0x%X, q_scale_type=%d, dctsatlim=%d, " \
-    "nonsat_mquant=0x%X"
+#define  QUANT_NON_INTRA_ARGS picture, src, dst, mquant, nonsat_mquant
 
 
 int quant_non_intra_altivec(QUANT_NON_INTRA_PDECL)
 {
-    int mquant = *nonsat_mquant;
     int i, j, N, nzblockbits, last_block, recalc_blocks;
-    vector unsigned short *pqm;
-    vector unsigned short *inter_q_mat = wsp->inter_q_mat;
+    unsigned short *popt_inter_q, *pqm;
     signed short *ps, *pd;
     vector unsigned short zero, four;
     vector float one;
@@ -102,9 +93,10 @@ int quant_non_intra_altivec(QUANT_NON_INTRA_PDECL)
 
 
 #ifdef ALTIVEC_VERIFY /* {{{ */
-    if (NOT_VECTOR_ALIGNED(wsp->inter_q_mat))
-	mjpeg_error_exit1("quant_non_intra: wsp->inter_q_mat %% 16 != 0, (%d)",
-	    wsp->inter_q_mat);
+    if (NOT_VECTOR_ALIGNED(opt_inter_q))
+	mjpeg_error_exit1("quant_non_intra: opt_inter_q %% 16 != 0, (%d)",
+	    opt_inter_q);
+
     if (NOT_VECTOR_ALIGNED(src))
 	mjpeg_error_exit1("quant_non_intra: src %% 16 != 0, (%d)", src);
 
@@ -115,25 +107,25 @@ int quant_non_intra_altivec(QUANT_NON_INTRA_PDECL)
 
 #define QUANT_NON_INTRA_AB /* {{{ */                                         \
     qmA = vec_ld(0, pqm);                                                    \
-    pqm++;                                                                   \
+    pqm += 8;                                                                \
     qmB = vec_ld(0, pqm);                                                    \
-    pqm++;                                                                   \
+    pqm += 8;                                                                \
     srcA = vec_ld(0, ps);                                                    \
     ps += 8;                                                                 \
     srcB = vec_ld(0, ps);                                                    \
     ps += 8;                                                                 \
 									     \
     /* calculate divisor */                                                  \
-    dA0 = vfp(vec_mergeh(zero, qmA));                                       \
-    dA1 = vfp(vec_mergel(zero, qmA));                                       \
-    dB0 = vfp(vec_mergeh(zero, qmB));                                       \
-    dB1 = vfp(vec_mergel(zero, qmB));                                       \
+    vu16(dA0) = vec_mergeh(zero, qmA);                                       \
+    vu16(dA1) = vec_mergel(zero, qmA);                                       \
+    vu16(dB0) = vec_mergeh(zero, qmB);                                       \
+    vu16(dB1) = vec_mergel(zero, qmB);                                       \
     vuv = vec_ld(0, (unsigned short*)&vu);                                   \
     vuv = vec_splat(vuv, 0); /* splat mquant */                              \
-    dA0  = vfp(vec_mulo(vu16(dA0), vuv));                                   \
-    dA1  = vfp(vec_mulo(vu16(dA1), vuv));                                   \
-    dB0  = vfp(vec_mulo(vu16(dB0), vuv));                                   \
-    dB1  = vfp(vec_mulo(vu16(dB1), vuv));                                   \
+    vu32(dA0)  = vec_mulo(vu16(dA0), vuv);                                   \
+    vu32(dA1)  = vec_mulo(vu16(dA1), vuv);                                   \
+    vu32(dB0)  = vec_mulo(vu16(dB0), vuv);                                   \
+    vu32(dB1)  = vec_mulo(vu16(dB1), vuv);                                   \
     dA0  = vec_ctf(vu32(dA0), 0);                                            \
     dA1  = vec_ctf(vu32(dA1), 0);                                            \
     dB0  = vec_ctf(vu32(dB0), 0);                                            \
@@ -144,70 +136,70 @@ int quant_non_intra_altivec(QUANT_NON_INTRA_PDECL)
     reB1 = vec_re(dB1);                                                      \
 									     \
     /* refinement #1 */                                                      \
-    t1 = vu16(vec_nmsub(reA0, vfp(dA0), vfp(one)));                           \
-    t2 = vu16(vec_nmsub(reA1, vfp(dA1), vfp(one)));                           \
-    t3 = vu16(vec_nmsub(reB0, vfp(dB0), vfp(one)));                           \
-    t4 = vu16(vec_nmsub(reB1, vfp(dB1), vfp(one)));                           \
+    vfp(t1) = vec_nmsub(reA0, vfp(dA0), vfp(one));                           \
+    vfp(t2) = vec_nmsub(reA1, vfp(dA1), vfp(one));                           \
+    vfp(t3) = vec_nmsub(reB0, vfp(dB0), vfp(one));                           \
+    vfp(t4) = vec_nmsub(reB1, vfp(dB1), vfp(one));                           \
     reA0 = vec_madd(reA0, vfp(t1), reA0);                                    \
     reA1 = vec_madd(reA1, vfp(t2), reA1);                                    \
     reB0 = vec_madd(reB0, vfp(t3), reB0);                                    \
     reB1 = vec_madd(reB1, vfp(t4), reB1);                                    \
 									     \
     /* refinement #2 */                                                      \
-    t1 = vu16(vec_nmsub(reA0, vfp(dA0), vfp(one)));                           \
-    t2 = vu16(vec_nmsub(reA1, vfp(dA1), vfp(one)));                           \
-    t3 = vu16(vec_nmsub(reB0, vfp(dB0), vfp(one)));                           \
-    t4 = vu16(vec_nmsub(reB1, vfp(dB1), vfp(one)));                           \
+    vfp(t1) = vec_nmsub(reA0, vfp(dA0), vfp(one));                           \
+    vfp(t2) = vec_nmsub(reA1, vfp(dA1), vfp(one));                           \
+    vfp(t3) = vec_nmsub(reB0, vfp(dB0), vfp(one));                           \
+    vfp(t4) = vec_nmsub(reB1, vfp(dB1), vfp(one));                           \
     reA0 = vec_madd(reA0, vfp(t1), reA0);                                    \
     reA1 = vec_madd(reA1, vfp(t2), reA1);                                    \
     reB0 = vec_madd(reB0, vfp(t3), reB0);                                    \
     reB1 = vec_madd(reB1, vfp(t4), reB1);                                    \
 									     \
     /* (sA0,sB0) = abs(ps[n],ps[n+1]) << 4 {{{ */                            \
-    t1 = vu16(vec_subs(vs16(zero), srcA));                                   \
-    t2 = vu16(vec_subs(vs16(zero), srcB));                                   \
-    t3 = vu16(vec_max(srcA, vs16(t1)));                                      \
-    t4 = vu16(vec_max(srcB, vs16(t2)));                                      \
+    vs16(t1) = vec_subs(vs16(zero), srcA);                                   \
+    vs16(t2) = vec_subs(vs16(zero), srcB);                                   \
+    vs16(t3) = vec_max(srcA, vs16(t1));                                      \
+    vs16(t4) = vec_max(srcB, vs16(t2));                                      \
     four = vec_splat_u16(4);                                                 \
-    t1 = vu16(vec_sl(vu16(t3), four));                                       \
-    t2 = vu16(vec_sl(vu16(t4), four));                                       \
+    vu16(t1) = vec_sl(vu16(t3), four);                                       \
+    vu16(t2) = vec_sl(vu16(t4), four);                                       \
     /* }}} */                                                                \
 									     \
-    sA0 = vfp(vec_mergeh(zero, vu16(t1)));                                  \
-    sA1 = vfp(vec_mergel(zero, vu16(t1)));                                  \
-    sB0 = vfp(vec_mergeh(zero, vu16(t2)));                                  \
-    sB1 = vfp(vec_mergel(zero, vu16(t2)));                                  \
-    sA0 = vfp(vec_ctf(vu32(sA0), 0));                                        \
-    sA1 = vfp(vec_ctf(vu32(sA1), 0));                                        \
-    sB0 = vfp(vec_ctf(vu32(sB0), 0));                                        \
-    sB1 = vfp(vec_ctf(vu32(sB1), 0));                                        \
+    vu16(sA0) = vec_mergeh(zero, vu16(t1));                                  \
+    vu16(sA1) = vec_mergel(zero, vu16(t1));                                  \
+    vu16(sB0) = vec_mergeh(zero, vu16(t2));                                  \
+    vu16(sB1) = vec_mergel(zero, vu16(t2));                                  \
+    vfp(sA0) = vec_ctf(vu32(sA0), 0);                                        \
+    vfp(sA1) = vec_ctf(vu32(sA1), 0);                                        \
+    vfp(sB0) = vec_ctf(vu32(sB0), 0);                                        \
+    vfp(sB1) = vec_ctf(vu32(sB1), 0);                                        \
 									     \
     /* calculate quotient */                                                 \
-    qtA0  = vfp(vec_madd(vfp(sA0), reA0, vfp(zero)));                        \
-    qtA1  = vfp(vec_madd(vfp(sA1), reA1, vfp(zero)));                        \
-    qtB0  = vfp(vec_madd(vfp(sB0), reB0, vfp(zero)));                        \
-    qtB1  = vfp(vec_madd(vfp(sB1), reB1, vfp(zero)));                        \
+    vfp(qtA0)  = vec_madd(vfp(sA0), reA0, vfp(zero));                        \
+    vfp(qtA1)  = vec_madd(vfp(sA1), reA1, vfp(zero));                        \
+    vfp(qtB0)  = vec_madd(vfp(sB0), reB0, vfp(zero));                        \
+    vfp(qtB1)  = vec_madd(vfp(sB1), reB1, vfp(zero));                        \
 									     \
     /* calculate remainder */                                                \
-    rmA0  = vfp(vec_nmsub(vfp(dA0), vfp(qtA0), vfp(sA0)));                   \
-    rmA1  = vfp(vec_nmsub(vfp(dA1), vfp(qtA1), vfp(sA1)));                   \
-    rmB0  = vfp(vec_nmsub(vfp(dB0), vfp(qtB0), vfp(sB0)));                   \
-    rmB1  = vfp(vec_nmsub(vfp(dB1), vfp(qtB1), vfp(sB1)));                   \
+    vfp(rmA0)  = vec_nmsub(vfp(dA0), vfp(qtA0), vfp(sA0));                   \
+    vfp(rmA1)  = vec_nmsub(vfp(dA1), vfp(qtA1), vfp(sA1));                   \
+    vfp(rmB0)  = vec_nmsub(vfp(dB0), vfp(qtB0), vfp(sB0));                   \
+    vfp(rmB1)  = vec_nmsub(vfp(dB1), vfp(qtB1), vfp(sB1));                   \
 									     \
     /* round quotient with remainder */                                      \
-    qtA0  = vfp(vec_madd(vfp(rmA0), reA0, vfp(qtA0)));                       \
-    qtA1  = vfp(vec_madd(vfp(rmA1), reA1, vfp(qtA1)));                       \
-    qtB0  = vfp(vec_madd(vfp(rmB0), reB0, vfp(qtB0)));                       \
-    qtB1  = vfp(vec_madd(vfp(rmB1), reB1, vfp(qtB1)));                       \
+    vfp(qtA0)  = vec_madd(vfp(rmA0), reA0, vfp(qtA0));                       \
+    vfp(qtA1)  = vec_madd(vfp(rmA1), reA1, vfp(qtA1));                       \
+    vfp(qtB0)  = vec_madd(vfp(rmB0), reB0, vfp(qtB0));                       \
+    vfp(qtB1)  = vec_madd(vfp(rmB1), reB1, vfp(qtB1));                       \
 									     \
     /* convert to integer */                                                 \
-    qtA0 = vfp(vec_ctu(vfp(qtA0), 0));                                      \
-    qtA1 = vfp(vec_ctu(vfp(qtA1), 0));                                      \
-    qtB0 = vfp(vec_ctu(vfp(qtB0), 0));                                      \
-    qtB1 = vfp(vec_ctu(vfp(qtB1), 0));                                      \
+    vu32(qtA0) = vec_ctu(vfp(qtA0), 0);                                      \
+    vu32(qtA1) = vec_ctu(vfp(qtA1), 0);                                      \
+    vu32(qtB0) = vec_ctu(vfp(qtB0), 0);                                      \
+    vu32(qtB1) = vec_ctu(vfp(qtB1), 0);                                      \
 									     \
-    dstA = vs16(vec_pack(vu32(qtA0), vu32(qtA1)));                           \
-    dstB = vs16(vec_pack(vu32(qtB0), vu32(qtB1)));                           \
+    vu16(dstA) = vec_pack(vu32(qtA0), vu32(qtA1));                           \
+    vu16(dstB) = vec_pack(vu32(qtB0), vu32(qtB1));                           \
 									     \
     /* test for non-zero values */                                           \
     selA = vec_cmpgt(vu16(dstA), zero);                                      \
@@ -219,10 +211,10 @@ int quant_non_intra_altivec(QUANT_NON_INTRA_PDECL)
 
 #define SIGN_AND_STORE /* {{{ */                                             \
     /* sign dst blocks */                                                    \
-    selA = vec_cmpgt(vs16(zero), srcA);                                \
+    selA = vec_cmpgt(vs16(zero), srcA);                                      \
     selB = vec_cmpgt(vs16(zero), srcB);                                      \
-    t1 = vu16(vec_subs(vs16(zero), dstA));                                   \
-    t2 = vu16(vec_subs(vs16(zero), dstB));                                   \
+    vs16(t1) = vec_subs(vs16(zero), dstA);                                   \
+    vs16(t2) = vec_subs(vs16(zero), dstB);                                   \
     dstA = vec_sel(dstA, vs16(t1), selA);                                    \
     dstB = vec_sel(dstB, vs16(t2), selB);                                    \
 									     \
@@ -236,11 +228,11 @@ int quant_non_intra_altivec(QUANT_NON_INTRA_PDECL)
 
 #define UPDATE_NZBLOCKBITS /* {{{ */                                         \
     /* quasi-count the non-zero values and store to vu.s.nz */               \
-    nz = vb16(vec_sums(vs32(nz), vs32(zero)));                               \
-    nz = vb16(vec_splat(vu32(nz), 3));                                       \
+    vs32(nz) = vec_sums(vs32(nz), vs32(zero));                               \
+    vu32(nz) = vec_splat(vu32(nz), 3);                                       \
     vuv = vec_ld(0, (unsigned short*)&vu);                                   \
     /* vuv = ( vuv(mquant, clipvalue), nz, (), () ) */                       \
-    vuv = vu16(vec_mergeh(vu32(vuv), vu32(nz)));                             \
+    vu32(vuv) = vec_mergeh(vu32(vuv), vu32(nz));                             \
     vec_st(vuv, 0, (unsigned short*)&vu); /* store for scalar access */      \
     nzblockbits |= ((!!vu.s.nz) << i);    /* set non-zero block bit */       \
     /* }}} */
@@ -249,32 +241,33 @@ int quant_non_intra_altivec(QUANT_NON_INTRA_PDECL)
     AMBER_START;
 
 /* 0x01080010 = ((1<<24) & 0x1F000000)|((8<<16) & 0x00FF0000)|(16 & 0xFFFF) */
+    popt_inter_q = (unsigned short*)opt_inter_q;
     ps = src;
     pd = dst;
 
 #ifdef ALTIVEC_DST
-    vec_dst(inter_q_mat, 0x01080010, 0);
+    vec_dst(popt_inter_q, 0x01080010, 0);
     vec_dst(ps, 0x01040010, 1);
     vec_dstst(pd, 0x01040010, 2);
 #endif
 
     vu.s.mquant = mquant;
-    vu.s.clipvalue = dctsatlim;
+    vu.s.clipvalue = opt_dctsatlim;
 
     zero = vec_splat_u16(0);
-    one = vfp(vec_splat_u32(1));
+    vu32(one) = vec_splat_u32(1);
     one = vec_ctf(vu32(one), 0);
 
     nzblockbits = 0;
-    N = BLOCK_COUNT;
+    N = block_count;
     i = N;
     last_block = 0; /* counting down from i */
     recalc_blocks = 0;
 
     do {
 recalc:
-	pqm = inter_q_mat;
-	nz = vb16(vec_splat_u16(0));
+	pqm = popt_inter_q;
+	vu16(nz) = vec_splat_u16(0);
 	max = vec_splat_u16(0);
 	j = 4;
 	do {
@@ -294,7 +287,7 @@ recalc:
 	vuv = vec_ld(0, (unsigned short*)&vu);
 	vuv = vec_splat(vuv, 1); /* splat clipvalue */
 	if (vec_any_gt(max, vuv)) {
-	    int next_mquant = next_larger_quant(q_scale_type, mquant);
+	    int next_mquant = next_larger_quant(picture, mquant);
     	    if (next_mquant == mquant) {
 		/* saturation has occured, clip values then
 		 * goto saturated jump point.
@@ -306,20 +299,20 @@ recalc:
 		    pd += 8;
 		    srcB = vec_ld(0, pd);
 		    /* (dstA,dstB) = abs(srcA,srcB) {{{ */
-		    t1 = vu16(vec_subs(vs16(zero), srcA));
-		    t2 = vu16(vec_subs(vs16(zero), srcB));
+		    vs16(t1) = vec_subs(vs16(zero), srcA);
+		    vs16(t2) = vec_subs(vs16(zero), srcB);
 		    dstA = vec_max(srcA, vs16(t1));
 		    dstB = vec_max(srcB, vs16(t2));
 		    /* }}} */
 		    /* (dstA,dstB) = clip(dstA,dstB, vuv) {{{ */
-		    dstA = vs16(vec_min(vu16(dstA), vuv));
-		    dstB = vs16(vec_min(vu16(dstB), vuv));
+		    vu16(dstA) = vec_min(vu16(dstA), vuv);
+		    vu16(dstB) = vec_min(vu16(dstB), vuv);
 		    /* }}} */
 		    /* restore sign {{{ */
 		    selA = vec_cmpgt(vs16(zero), srcA);
 		    selB = vec_cmpgt(vs16(zero), srcB);
-		    t1 = vu16(vec_subs(vs16(zero), dstA));
-		    t2 = vu16(vec_subs(vs16(zero), dstB));
+		    vs16(t1) = vec_subs(vs16(zero), dstA);
+		    vs16(t2) = vec_subs(vs16(zero), dstB);
 		    dstA = vec_sel(dstA, vs16(t1), selA);
 		    dstB = vec_sel(dstB, vs16(t2), selB);
 		    /* }}} */
@@ -364,8 +357,8 @@ recalc:
 	pd = dst;
 
 	do {
-	    pqm = inter_q_mat;
-	    nz = vb16(vec_splat_u16(0));
+	    pqm = popt_inter_q;
+	    vu16(nz) = vec_splat_u16(0);
 	    j = 4;
 	    do {
 #ifdef ALTIVEC_DST
@@ -396,8 +389,8 @@ recalc:
 	recalc_blocks = 0; /* no more blocks after next loop */
 
 	do {
-	    pqm = inter_q_mat;
-	    nz = vb16(vec_splat_u16(0));
+	    pqm = popt_inter_q;
+	    vu16(nz) = vec_splat_u16(0);
 	    j = 4;
 	    do {
 #ifdef ALTIVEC_DST
@@ -408,8 +401,8 @@ recalc:
 		/* clip {{{ */
 		vuv = vec_ld(0, (unsigned short*)&vu);
 		vuv = vec_splat(vuv, 1); /* splat clipvalue */
-		dstA = vs16(vec_min(vu16(dstA), vuv));
-		dstB = vs16(vec_min(vu16(dstB), vuv));
+		vu16(dstA) = vec_min(vu16(dstA), vuv);
+		vu16(dstB) = vec_min(vu16(dstB), vuv);
 		/* }}} */
 		SIGN_AND_STORE;
 	    } while (--j);
@@ -436,15 +429,17 @@ done:
 
 
 #if ALTIVEC_TEST_FUNCTION(quant_non_intra) /* {{{ */
+#define QUANT_NON_INTRA_PFMT \
+  "picture=0x%X, src=0x%X, dst=0x%X, mquant=%d, nonsat_mquant=0x%X"
+
 #  ifdef ALTIVEC_VERIFY
 int quant_non_intra_altivec_verify(QUANT_NON_INTRA_PDECL)
 {
     int i, len, nzb1, nzb2, nsmq, nsmq1, nsmq2;
     unsigned long checksum1, checksum2;
     int16_t *dstcpy;
-    uint16_t *inter_q = (uint16_t*)wsp->inter_q_mat;
 
-    len = 64 * BLOCK_COUNT;
+    len = 64 * block_count;
 
     dstcpy = (int16_t*)malloc(len*sizeof(int16_t));
     if (dstcpy == NULL)
@@ -456,7 +451,7 @@ int quant_non_intra_altivec_verify(QUANT_NON_INTRA_PDECL)
     nzb1 = quant_non_intra_altivec(QUANT_NON_INTRA_ARGS);
     nsmq1 = *nonsat_mquant;
     for (checksum1 = i = 0; i < len; i++)
-	checksum1 += abs(dst[i]);
+	checksum1 += intabs(dst[i]);
 
     memcpy(dstcpy, dst, len*sizeof(int16_t));
 
@@ -466,7 +461,7 @@ int quant_non_intra_altivec_verify(QUANT_NON_INTRA_PDECL)
     nzb2 = ALTIVEC_TEST_WITH(quant_non_intra)(QUANT_NON_INTRA_ARGS);
     nsmq2 = *nonsat_mquant;
     for (checksum2 = i = 0; i < len; i++)
-	checksum2 += abs(dst[i]);
+	checksum2 += intabs(dst[i]);
 
     if (nzb1 != nzb2 || checksum1 != checksum2 || nsmq1 != nsmq2) {
 	mjpeg_debug("quant_non_intra(" QUANT_NON_INTRA_PFMT ")",
@@ -481,7 +476,7 @@ int quant_non_intra_altivec_verify(QUANT_NON_INTRA_PDECL)
 	if (dstcpy[i] != dst[i]) {
 	    mjpeg_debug("quant_non_intra: src[%d]=%d, qmat=%d, "
 			"dst %d != %d",
-			i, src[i], inter_q[i&63], dstcpy[i], dst[i]);
+			i, src[i], opt_inter_q[i&63], dstcpy[i], dst[i]);
 	}
     }
 

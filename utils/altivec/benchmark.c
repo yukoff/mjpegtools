@@ -17,8 +17,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
+#ifdef HAVE_ALTIVEC_H
+#include <altivec.h>
 #endif
 
 #include "altivec_conf.h"
@@ -87,18 +87,6 @@ extern struct benchmark_stats n##_altivec_benchmark_stats
 #if ALTIVEC_TEST_FUNCTION(quant_weight_coeff_sum)
   EXTERN_STATS(quant_weight_coeff_sum);
 #endif
-#if ALTIVEC_TEST_FUNCTION(iquant_non_intra_m1)
-  EXTERN_STATS(iquant_non_intra_m1);
-#endif
-#if ALTIVEC_TEST_FUNCTION(iquant_non_intra_m2)
-  EXTERN_STATS(iquant_non_intra_m2);
-#endif
-#if ALTIVEC_TEST_FUNCTION(iquant_intra_m1)
-  EXTERN_STATS(iquant_intra_m1);
-#endif
-#if ALTIVEC_TEST_FUNCTION(iquant_intra_m2)
-  EXTERN_STATS(iquant_intra_m2);
-#endif
 #if ALTIVEC_TEST_FUNCTION(variance)
   EXTERN_STATS(variance);
 #endif
@@ -117,12 +105,7 @@ extern struct benchmark_stats n##_altivec_benchmark_stats
 #if ALTIVEC_TEST_FUNCTION(sub_mean_reduction)
   EXTERN_STATS(sub_mean_reduction);
 #endif
-#if ALTIVEC_TEST_FUNCTION(fdct)
-  EXTERN_STATS(fdct);
-#endif
-#if ALTIVEC_TEST_FUNCTION(idct)
-  EXTERN_STATS(idct);
-#endif
+
 
 
 #define BENCHMARK_INFO(n) \
@@ -172,18 +155,6 @@ struct benchmark_info benchmarktab[] = {
 #if ALTIVEC_TEST_FUNCTION(quant_weight_coeff_sum)
   BENCHMARK_INFO(quant_weight_coeff_sum)
 #endif
-#if ALTIVEC_TEST_FUNCTION(iquant_non_intra_m1)
-  BENCHMARK_INFO(iquant_non_intra_m1)
-#endif
-#if ALTIVEC_TEST_FUNCTION(iquant_non_intra_m2)
-  BENCHMARK_INFO(iquant_non_intra_m2)
-#endif
-#if ALTIVEC_TEST_FUNCTION(iquant_intra_m1)
-  BENCHMARK_INFO(iquant_intra_m1)
-#endif
-#if ALTIVEC_TEST_FUNCTION(iquant_intra_m2)
-  BENCHMARK_INFO(iquant_intra_m2)
-#endif
 #if ALTIVEC_TEST_FUNCTION(variance)
   BENCHMARK_INFO(variance)
 #endif
@@ -201,12 +172,6 @@ struct benchmark_info benchmarktab[] = {
 #endif
 #if ALTIVEC_TEST_FUNCTION(sub_mean_reduction)
   BENCHMARK_INFO(sub_mean_reduction)
-#endif
-#if ALTIVEC_TEST_FUNCTION(fdct)
-  BENCHMARK_INFO(fdct)
-#endif
-#if ALTIVEC_TEST_FUNCTION(idct)
-  BENCHMARK_INFO(idct)
 #endif
 };
 

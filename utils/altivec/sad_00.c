@@ -17,8 +17,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
+#ifdef HAVE_ALTIVEC_H
+#include <altivec.h>
 #endif
 
 #include "altivec_motion.h"
@@ -27,11 +27,6 @@
 
 /* #define AMBER_ENABLE */
 #include "amber.h"
-
-#ifdef HAVE_ALTIVEC_H
-/* include last to ensure AltiVec type semantics, especially for bool. */
-#include <altivec.h>
-#endif
 
 
 /*
@@ -74,16 +69,16 @@ int sad_00_altivec(SAD_00_PDECL)
 	} s;
     } vo;
 
+#ifdef ALTIVEC_VERIFY
   if (NOT_VECTOR_ALIGNED(blk2))
     mjpeg_error_exit1("sad_00: blk2 %% 16 != 0, (%d)\n", blk2);
 
-#ifdef ALTIVEC_VERIFY
   if (NOT_VECTOR_ALIGNED(rowstride))
     mjpeg_error_exit1("sad_00: rowstride %% 16 != 0, (%d)\n", rowstride);
-#endif
 
   if (h != 8 && h != 16)
     mjpeg_error_exit1("sad_00: h != [8|16], (%d)\n", h);
+#endif
 
     AMBER_START;
 

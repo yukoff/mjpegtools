@@ -55,19 +55,6 @@
 #include <sys/soundcard.h>
 #endif
 #ifdef HAVE_V4L 
-/* Because of some really cool feature in video4linux1, also known as
- * 'not including sys/types.h and sys/time.h', we had to include it
- * ourselves. In all their intelligence, these people decided to fix
- * this in the next version (video4linux2) in such a cool way that it
- * breaks all compilations of old stuff...
- * The real problem is actually that linux/time.h doesn't use proper
- * macro checks before defining types like struct timeval. The proper
- * fix here is to either fuck the kernel header (which is what we do
- * by defining _LINUX_TIME_H, an innocent little hack) or by fixing it
- * upstream, which I'll consider doing later on. If you get compiler
- * errors here, check your linux/time.h && sys/time.h header setup.
- */
-#define _LINUX_TIME_H
 #include <linux/videodev.h>
 #else
 #define VIDEO_MODE_PAL		0
@@ -80,224 +67,15 @@
 #include <pthread.h>
 
 #ifdef HAVE_SDL
-#include <SDL.h>
+#include <SDL/SDL.h>
 #endif
 
-#include "mjpeg_logging.h"
+#include "mjpeg_types.h"
 #include "liblavplay.h"
 #include "audiolib.h"
+/*#include "lav_io.h" */
+/*#include "editlist.h" */
 #include "jpegutils.h"
-
-#ifdef	HAVE_LIBDV
-#include <libdv/dv.h>
-#endif
-
-/* Prototypes to avoid compile time warning errors */
-
-void frame_YUV422_to_YUV420P(uint8_t **, uint8_t *, int , int );
-
-#ifdef HAVE_SDL
-int frame_planar_to_packed(uint8_t *, uint8_t **, int, int, int, int, int);
-#endif
-
-/*
- * As far as I (maddog) can tell, this is what is going on with libdv-0.9
- *  and the unpacking routine... 
- *    o Ft/Fb refer to top/bottom scanlines (interleaved) --- each sample
- *       is implicitly tagged by 't' or 'b' (samples are not mixed between
- *       fields)
- *    o Indices on Cb and Cr samples indicate the Y sample with which
- *       they are co-sited.
- *    o '^' indicates which samples are preserved by the unpacking
- *
- * libdv packs both NTSC 4:1:1 and PAL 4:2:0 into a common frame format of
- *  packed 4:2:2 pixels as follows:
- *
- *
- ***** NTSC 4:1:1 *****
- *
- *   libdv's 4:2:2-packed representation  (chroma repeated horizontally)
- *
- *Ft Y00.Cb00.Y01.Cr00.Y02.Cb00.Y03.Cr00 Y04.Cb04.Y05.Cr04.Y06.Cb04.Y07.Cr04
- *    ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^
- *Fb Y00.Cb00.Y01.Cr00.Y02.Cb00.Y03.Cr00 Y04.Cb04.Y05.Cr04.Y06.Cb04.Y07.Cr04
- *    ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^
- *Ft Y10.Cb10.Y11.Cr10.Y12.Cb10.Y13.Cr10 Y14.Cb14.Y15.Cr14.Y16.Cb14.Y17.Cr14
- *    ^        ^        ^        ^        ^        ^        ^        ^    
- *Fb Y10.Cb10.Y11.Cr10.Y12.Cb10.Y13.Cr10 Y14.Cb14.Y15.Cr14.Y16.Cb14.Y17.Cr14
- *    ^        ^        ^        ^        ^        ^        ^        ^    
- *
- *    lavtools unpacking into 4:2:0-planar  (note lossiness)
- *
- *Ft  Y00.Y01.Y02.Y03.Y04.Y05.Y06.Y07...
- *Fb  Y00.Y01.Y02.Y03.Y04.Y05.Y06.Y07...
- *Ft  Y10.Y11.Y12.Y13.Y14.Y15.Y16.Y17...
- *Fb  Y10.Y11.Y12.Y13.Y14.Y15.Y16.Y17...
- *
- *Ft  Cb00.Cb00.Cb04.Cb04...    Cb00,Cb04... are doubled
- *Fb  Cb00.Cb00.Cb04.Cb04...    Cb10,Cb14... are ignored
- *
- *Ft  Cr00.Cr00.Cr04.Cr04...
- *Fb  Cr00.Cr00.Cr04.Cr04...
- *
- * 
- ***** PAL 4:2:0 *****
- *
- *   libdv's 4:2:2-packed representation  (chroma repeated vertically)
- *
- *Ft Y00.Cb00.Y01.Cr10.Y02.Cb02.Y03.Cr12 Y04.Cb04.Y05.Cr14.Y06.Cb06.Y07.Cr16
- *    ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^
- *Fb Y00.Cb00.Y01.Cr10.Y02.Cb02.Y03.Cr12 Y04.Cb04.Y05.Cr14.Y06.Cb06.Y07.Cr16
- *    ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^   ^    ^
- *Ft Y10.Cb00.Y11.Cr10.Y12.Cb02.Y13.Cr12 Y14.Cb04.Y15.Cr14.Y16.Cb06.Y17.Cr16
- *    ^        ^        ^        ^        ^        ^        ^        ^    
- *Fb Y10.Cb00.Y11.Cr10.Y12.Cb02.Y13.Cr12 Y14.Cb04.Y15.Cr14.Y16.Cb06.Y17.Cr16
- *    ^        ^        ^        ^        ^        ^        ^        ^    
- *
- *    lavtools unpacking into 4:2:0-planar
- *
- *Ft  Y00.Y01.Y02.Y03.Y04.Y05.Y06.Y07...
- *Fb  Y00.Y01.Y02.Y03.Y04.Y05.Y06.Y07...
- *Ft  Y10.Y11.Y12.Y13.Y14.Y15.Y16.Y17...
- *Fb  Y10.Y11.Y12.Y13.Y14.Y15.Y16.Y17...
- *
- *Ft  Cb00.Cb02.Cb04.Cb06...
- *Fb  Cb00.Cb02.Cb04.Cb06...
- *
- *Ft  Cr10.Cr12.Cr14.Cr16...
- *Fb  Cr10.Cr12.Cr14.Cr16...
- *
- */
-
-/*
- * Unpack libdv's 4:2:2-packed into our 4:2:0-planar,
- *  treating each interlaced field independently
- *
- */
-void frame_YUV422_to_YUV420P(uint8_t **output, uint8_t *input,
-			     int width, int height)
-{
-    int i, j, w2;
-    uint8_t *y, *cb, *cr;
-
-    w2 = width/2;
-    y = output[0];
-    cb = output[1];
-    cr = output[2];
-
-    for (i=0; i<height; i+=4) {
-	/* process two scanlines (one from each field, interleaved) */
-        /* ...top-field scanline */
-        for (j=0; j<w2; j++) {
-            /* packed YUV 422 is: Y[i] U[i] Y[i+1] V[i] */
-            *(y++) =  *(input++);
-            *(cb++) = *(input++);
-            *(y++) =  *(input++);
-            *(cr++) = *(input++);
-        }
-        /* ...bottom-field scanline */
-        for (j=0; j<w2; j++) {
-            /* packed YUV 422 is: Y[i] U[i] Y[i+1] V[i] */
-            *(y++) =  *(input++);
-            *(cb++) = *(input++);
-            *(y++) =  *(input++);
-            *(cr++) = *(input++);
-        }
-	/* process next two scanlines (one from each field, interleaved) */
-        /* ...top-field scanline */
-	for (j=0; j<w2; j++) {
-	  /* skip every second line for U and V */
-	  *(y++) = *(input++);
-	  input++;
-	  *(y++) = *(input++);
-	  input++;
-	}
-        /* ...bottom-field scanline */
-	for (j=0; j<w2; j++) {
-	  /* skip every second line for U and V */
-	  *(y++) = *(input++);
-	  input++;
-	  *(y++) = *(input++);
-	  input++;
-	}
-    }
-}
-
-#define FOURCC_I420 0x30323449
-#define FOURCC_I422 0x32323449
-
-#ifdef HAVE_SDL
-int frame_planar_to_packed(uint8_t *output, uint8_t **input,
-			   int width, int height, int ofmt, int ifmt, int interlaced)
-{
-  uint8_t *y, *u, *v, *sy, *su, *sv, *sye, *su0, *sv0;
-  int dy, dc, cw, scw, ch, scdv, scdh, ln, sln, px, spx;
-
-  ch = height;
-  cw = scw = width;
-#define DIV_MAX 4
-  scdv = scdh = DIV_MAX;
-  switch (ofmt) {
-  case SDL_YUY2_OVERLAY:
-    scdh /= 2;
-    cw   /= 2;
-    y = output;     dy = 2;
-    u = output + 1;
-    v = output + 3; dc = 4;
-    break;
-  case SDL_UYVY_OVERLAY:
-    scdh /= 2;
-    cw   /= 2;
-    y = output + 1; dy = 2;
-    u = output;
-    v = output + 2; dc = 4;
-    break;
-  case SDL_YVYU_OVERLAY:
-    scdh /= 2;
-    cw   /= 2;
-    y = output;     dy = 2;
-    u = output + 3;
-    v = output + 1; dc = 4;
-    break;
-  default:
-    return 1;
-  }
-  switch (ifmt) {
-  case FOURCC_I420:
-    scdv *= 2;
-  case FOURCC_I422:
-    scdh *= 2;
-    scw  /= 2;
-    sy  = input[0];
-    su0 = input[1];
-    sv0 = input[2];
-    break;
-  default:
-    return 1;
-  }
-  sye = sy + (width * height);
-
-  while (sy < sye) {
-    *y = *sy++; y += dy;
-  }
-  for (ln = 0; ln < ch; ln++) {
-    sln = ln * DIV_MAX / scdv;
-    if (interlaced) {
-      sln &= ~1;
-      sln |= (ln & 1);
-    }
-    su = su0 + (sln * scw);
-    sv = sv0 + (sln * scw);
-    for (px = 0; px < cw; px++) {
-      spx = px * DIV_MAX / scdh;
-      *u = su[spx]; u += dc;
-      *v = sv[spx]; v += dc;
-    }
-  }
-
-  return 0;
-}
-#endif
 
 
 /* On some systems MAP_FAILED seems to be missing */
@@ -343,23 +121,22 @@ typedef struct {
    pthread_mutex_t syncinfo_mutex;
    long buffer_entry[MJPEG_MAX_BUF];
    long currently_processed_entry;
-
-   int yuvformat;
-   uint8_t *yuvbuff[3];
-# ifdef	HAVE_LIBDV
-   dv_decoder_t *decoder;
-   uint16_t pitches[3];
-# endif
 #endif
 
+#if defined(SUPPORT_READ_DV2) || defined(SUPPORT_READ_YUV420)
    int data_format[MJPEG_MAX_BUF];
+#endif
+
    struct mjpeg_sync syncinfo[MJPEG_MAX_BUF]; /* synchronization info */
+
    unsigned long *save_list;                  /* for editing purposes */
    long save_list_len;                        /* for editing purposes */
+
    uint8_t abuff[16384];                       /* the audio buffer */
    double spas;                               /* seconds per audio sample */
    long   audio_buffer_size;                  /* audio stream buffer size */
    int    audio_mute;                         /* controls whether to currently play audio or not */
+
    int    state;                              /* playing, paused or stoppped */
    pthread_t playback_thread;                 /* the thread for the whole playback-library */
 } video_playback_setup;
@@ -373,19 +150,44 @@ typedef struct {
 static void lavplay_msg(int type, lavplay_t *info, const char format[], ...) GNUC_PRINTF(3,4);
 static void lavplay_msg(int type, lavplay_t *info, const char format[], ...)
 {
-   char buf[1024];
-   va_list args;
+   if (!info)
+   {
+      /* we can't let errors pass without giving notice */
+      char buf[1024];
+      va_list args;
 
-   va_start(args, format);
-   vsnprintf(buf, sizeof(buf)-1, format, args);
-   va_end(args);
+      va_start(args, format);
+      vsnprintf(buf, sizeof(buf)-1, format, args);
 
-   if (!info) 		/* we can't let errors pass without giving notice */
-      mjpeg_error("**ERROR: %s", buf);
+      printf("**ERROR: %s\n", buf);
+
+      va_end(args);
+   }
    else if (info->msg_callback)
+   {
+      char buf[1024];
+      va_list args;
+
+      va_start(args, format);
+      vsnprintf(buf, sizeof(buf)-1, format, args);
+
       info->msg_callback(type, buf);
+
+      va_end(args);
+   }
    else if (type == LAVPLAY_MSG_ERROR)
-      mjpeg_error("**ERROR: %s", buf);
+   {
+      /* we can't let errors pass without giving notice */
+      char buf[1024];
+      va_list args;
+
+      va_start(args, format);
+      vsnprintf(buf, sizeof(buf)-1, format, args);
+
+      printf("**ERROR: %s\n", buf);
+
+      va_end(args);
+   }
 }
 
 
@@ -520,16 +322,18 @@ static int lavplay_get_video(lavplay_t *info, uint8_t *buff, long frame_num)
  ******************************************************/
 
 static int lavplay_get_audio(lavplay_t *info, uint8_t *buff, long frame_num, int mute)
-   {
-   int num_samps;
-
+{
    if (info->get_audio_sample)
+   {
+      int num_samps;
       info->get_audio_sample(buff, &num_samps, frame_num);
-   else
-      num_samps =  el_get_audio_data(buff, frame_num, info->editlist, mute);
-/* fprintf(stderr, "get_audio_sample %x num_samps %x frame_num %x\n", info->get_audio_sample, num_samps, frame_num); */
-   return(num_samps);
+      return num_samps;
    }
+   else
+   {
+      return el_get_audio_data(buff, frame_num, info->editlist, mute);
+   }
+}
 
 
 /******************************************************
@@ -540,7 +344,9 @@ static int lavplay_get_audio(lavplay_t *info, uint8_t *buff, long frame_num, int
  ******************************************************/
 
 static int lavplay_queue_next_frame(lavplay_t *info, uint8_t *vbuff,
+#if defined(SUPPORT_READ_DV2) || defined(SUPPORT_READ_YUV420)
 				    int data_format,
+#endif
 				    int skip_video, int skip_audio, int skip_incr)
 {
    int res, mute, i, jpeg_len1, jpeg_len2, new_buff_no;
@@ -552,7 +358,9 @@ static int lavplay_queue_next_frame(lavplay_t *info, uint8_t *vbuff,
    if (!skip_video)
    {
       if (info->flicker_reduction && editlist->video_inter &&
+#if defined(SUPPORT_READ_DV2) || defined(SUPPORT_READ_YUV420)
 	  data_format == DATAFORMAT_MJPG &&
+#endif	  
 	  settings->current_playback_speed <= 0)
       {
          if (settings->current_playback_speed == 0)
@@ -713,95 +521,58 @@ static int lavplay_SDL_unlock(lavplay_t *info)
 
 #ifdef HAVE_SDL
 static int lavplay_SDL_update(lavplay_t *info, uint8_t *jpeg_buffer,
+#if defined(SUPPORT_READ_DV2) || defined(SUPPORT_READ_YUV420)
 			      int data_format,
+#endif
 			      int buf_len)
 {
    video_playback_setup *settings = (video_playback_setup *)info->settings;
-   uint8_t *output[3];
-   uint8_t *frame_tmp;
    EditList *editlist = info->editlist;
-
 
    if (!lavplay_SDL_lock(info)) return 0;
 
    /* decode frame to yuv */
+#if defined(SUPPORT_READ_DV2) || defined(SUPPORT_READ_YUV420)
    switch (data_format) {
    case DATAFORMAT_MJPG:
-      decode_jpeg_raw(jpeg_buffer, buf_len,
-		      editlist->video_inter>0&&info->exchange_fields?(editlist->video_inter+1)%2+1:editlist->video_inter,
-		      Y4M_CHROMA_422,
-		      editlist->video_width, editlist->video_height,
-		      settings->yuvbuff[0],
-		      settings->yuvbuff[1],
-		      settings->yuvbuff[2]);
-      frame_planar_to_packed(settings->yuv_overlay->pixels[0], settings->yuvbuff,
-			     editlist->video_width, editlist->video_height,
-			     settings->yuvformat, FOURCC_I422, 1);
+#endif
+   decode_jpeg_raw (jpeg_buffer, buf_len,
+      editlist->video_inter>0&&info->exchange_fields?(editlist->video_inter+1)%2+1:editlist->video_inter,
+      CHROMA420,
+      editlist->video_width, editlist->video_height, 
+      settings->yuv_overlay->pixels[0], 
+      settings->yuv_overlay->pixels[2],
+      settings->yuv_overlay->pixels[1]);
+#if defined(SUPPORT_READ_DV2) || defined(SUPPORT_READ_YUV420)
       break;
+# ifdef SUPPORT_READ_YUV420
    case DATAFORMAT_YUV420:
-      output[0] = jpeg_buffer;
-      output[1] = jpeg_buffer + (editlist->video_width * editlist->video_height);
-      output[2] = jpeg_buffer + (editlist->video_width * editlist->video_height * 5 / 4);
-      frame_planar_to_packed(settings->yuv_overlay->pixels[0], output,
-			     editlist->video_width, editlist->video_height,
-			     settings->yuvformat, FOURCC_I420, 1);
+      memcpy(settings->yuv_overlay->pixels[0],
+	     jpeg_buffer,
+	     editlist->video_width * editlist->video_height);
+      memcpy(settings->yuv_overlay->pixels[2],
+	     jpeg_buffer + (editlist->video_width * editlist->video_height),
+	     (editlist->video_width * editlist->video_height / 4));
+      memcpy(settings->yuv_overlay->pixels[1],
+	     jpeg_buffer + (editlist->video_width * editlist->video_height * 5 / 4),
+	     (editlist->video_width * editlist->video_height / 4));
       break;
-
-# ifdef HAVE_LIBDV
+# endif
+# ifdef SUPPORT_READ_DV2
    case DATAFORMAT_DV2:
-      dv_parse_header(settings->decoder, jpeg_buffer);
-      switch(settings->decoder->sampling) {
-      case e_dv_sample_420:
-	/* libdv decodes PAL DV directly as planar YUV 420
-	 * (YV12 or 4CC 0x32315659) if configured with the flag
-	 * --with-pal-yuv=YV12 which is not (!) the default
-	 */
-	if (libdv_pal_yv12 == 1) {
-	  settings->pitches[0] = settings->decoder->width;
-	  settings->pitches[1] = settings->decoder->width / 2;
-	  settings->pitches[2] = settings->decoder->width / 2;
-	  dv_decode_full_frame(settings->decoder, jpeg_buffer, e_dv_color_yuv,
-			       settings->yuvbuff, (int *)settings->pitches);
-	  /* swap the U and V components */
-	  frame_tmp = settings->yuvbuff[2];
-	  settings->yuvbuff[2] = settings->yuvbuff[1];
-	  settings->yuvbuff[1] = frame_tmp;
-	  frame_planar_to_packed(settings->yuv_overlay->pixels[0], settings->yuvbuff,
-				 editlist->video_width, editlist->video_height,
-				 settings->yuvformat, FOURCC_I420, 1);
-	  break;
-	}
-      case e_dv_sample_411:
-      case e_dv_sample_422:
-         /* libdv decodes NTSC DV (native 411) and by default also PAL
-          * DV (native 420) as packed YUV 422 (YUY2 or 4CC 0x32595559)
-          * where the U and V information is repeated.  This can be
-          * transformed to planar 420 (YV12 or 4CC 0x32315659).
-          * For NTSC DV this transformation is lossy.
-          */
-         settings->pitches[0] = settings->decoder->width * 2;
-         settings->pitches[1] = 0;
-         settings->pitches[2] = 0;
-
-	 dv_decode_full_frame(settings->decoder, jpeg_buffer, e_dv_color_yuv,
-		settings->yuv_overlay->pixels, (int *)settings->pitches);
-	 break;
-      case e_dv_sample_none:
-	 /* FIXME */
-	 break;
-     }
-     break;
-	
+     /* FIXME: not implemented, do default: */
 # endif
    default:
      return 0;
    }
+#endif
 
    if (!lavplay_SDL_unlock(info)) return 0;
    SDL_DisplayYUVOverlay(settings->yuv_overlay, &(settings->jpegdims));
+
    return 1;
 }
-#endif /* HAVE_SDL */
+#endif
 
 
 /******************************************************
@@ -850,10 +621,9 @@ static int lavplay_SDL_init(lavplay_t *info)
     *  except for ordering of Cb and Cr planes...
     * we swap those when we copy the data to the display buffer...
     */
-   /* FIXME: Is YUY2 best 422? */
    settings->yuv_overlay = SDL_CreateYUVOverlay(editlist->video_width,
 						editlist->video_height,
-						settings->yuvformat,
+						SDL_YV12_OVERLAY,
 						settings->screen);
    if (!settings->yuv_overlay)
    {
@@ -863,17 +633,13 @@ static int lavplay_SDL_init(lavplay_t *info)
    }
    lavplay_msg(LAVPLAY_MSG_INFO, info,
       "SDL YUV overlay: %s", settings->yuv_overlay->hw_overlay ? "hardware" : "software" );
-#if 0
-   if(settings->yuv_overlay->pitches[0] != settings->yuv_overlay->pitches[1] ||
-      settings->yuv_overlay->pitches[0] != settings->yuv_overlay->pitches[2] )
+   if(settings->yuv_overlay->pitches[0] != settings->yuv_overlay->pitches[1]*2 ||
+      settings->yuv_overlay->pitches[0] != settings->yuv_overlay->pitches[2]*2 )
    {
       lavplay_msg(LAVPLAY_MSG_ERROR, info,
-         "SDL returned pitches[] = { %d, %d, %d }", settings->yuv_overlay->pitches[0], settings->yuv_overlay->pitches[1], settings->yuv_overlay->pitches[2]);
-      lavplay_msg(LAVPLAY_MSG_ERROR, info,
-         "SDL returned non-YUV422 overlay!");
+         "SDL returned non-YUV420 overlay!");
       return 0;
    }
-#endif
 
    settings->jpegdims.x = 0; /* This is not going to work with interlaced pics !! */
    settings->jpegdims.y = 0;
@@ -1000,7 +766,9 @@ static void *lavplay_mjpeg_playback_thread(void * arg)
       /* There is one buffer to play - get ready to rock ! */
       if (settings->currently_processed_entry != settings->buffer_entry[settings->currently_processed_frame] &&
 	  !lavplay_SDL_update(info, settings->buff+settings->currently_processed_frame*settings->br.size,
+#if defined(SUPPORT_READ_DV2) || defined(SUPPORT_READ_YUV420)
          settings->data_format[settings->currently_processed_frame],
+#endif
          settings->br.size))
       {
          /* something went wrong - give a warning (don't exit yet) */
@@ -1062,7 +830,7 @@ static int lavplay_mjpeg_open(lavplay_t *info)
          if ((settings->video_fd = open(info->video_dev, O_RDWR)) < 0)
          {
             lavplay_msg(LAVPLAY_MSG_ERROR, info,
-               "Error opening %s: %s", info->video_dev, strerror(errno));
+               "Error opening %s: %s", info->video_dev, sys_errlist[errno]);
             return 0;
          }
 
@@ -1073,7 +841,7 @@ static int lavplay_mjpeg_open(lavplay_t *info)
          if (ioctl(settings->video_fd, MJPIOC_REQBUFS, &(settings->br)) < 0)
          {
             lavplay_msg(LAVPLAY_MSG_ERROR, info,
-               "Error requesting buffers: %s", strerror(errno));
+               "Error requesting buffers: %s", sys_errlist[errno]);
             return 0;
          }
 
@@ -1083,7 +851,7 @@ static int lavplay_mjpeg_open(lavplay_t *info)
          if (settings->buff == MAP_FAILED)
          {
             lavplay_msg(LAVPLAY_MSG_ERROR, info,
-               "Error mapping the video buffer: %s", strerror(errno));
+               "Error mapping the video buffer: %s", sys_errlist[errno]);
             return 0;
          }
          break;
@@ -1153,9 +921,7 @@ static int lavplay_mjpeg_get_params(lavplay_t *info, struct mjpeg_params *bp)
 #ifdef HAVE_SDL
    int i;
 #endif
-#ifdef HAVE_V4L
    video_playback_setup *settings = (video_playback_setup *)info->settings;
-#endif
    /*EditList *editlist = info->editlist; */
 
    switch (info->playback_mode)
@@ -1167,7 +933,7 @@ static int lavplay_mjpeg_get_params(lavplay_t *info, struct mjpeg_params *bp)
          if (ioctl(settings->video_fd, MJPIOC_G_PARAMS, bp) < 0)
          {
             lavplay_msg(LAVPLAY_MSG_ERROR, info,
-               "Error getting video parameters: %s", strerror(errno));
+               "Error getting video parameters: %s", sys_errlist[errno]);
             return 0;
          }
          break;
@@ -1229,7 +995,7 @@ static int lavplay_mjpeg_set_params(lavplay_t *info, struct mjpeg_params *bp)
       {
          lavplay_msg(LAVPLAY_MSG_ERROR, info,
             "Error getting device capabilities: %s",
-            strerror(errno));
+            sys_errlist[errno]);
          return 0;
       }
       /* hack for wrong return value of marvel cards..... */
@@ -1294,14 +1060,14 @@ static int lavplay_mjpeg_set_params(lavplay_t *info, struct mjpeg_params *bp)
       {
          lavplay_msg(LAVPLAY_MSG_ERROR, info,
             "Could not set on-screen window parameters (check framebuffer-params with v4l-conf): %s",
-            strerror(errno));
+            sys_errlist[errno]);
          return 0;
       }
       n = 1;
       if (ioctl(settings->video_fd, VIDIOCCAPTURE, &n) < 0)
       {
          lavplay_msg(LAVPLAY_MSG_ERROR, info,
-            "Could not activate on-screen window: %s", strerror(errno));
+            "Could not activate on-screen window: %s", sys_errlist[errno]);
          return 0;
       }
 
@@ -1323,7 +1089,7 @@ static int lavplay_mjpeg_set_params(lavplay_t *info, struct mjpeg_params *bp)
          if (ioctl(settings->video_fd, MJPIOC_S_PARAMS, bp) < 0)
          {
             lavplay_msg(LAVPLAY_MSG_ERROR, info,
-               "Error setting video parameters: %s", strerror(errno));
+               "Error setting video parameters: %s", sys_errlist[errno]);
             return 0;
          }
          break;
@@ -1384,8 +1150,7 @@ static int lavplay_mjpeg_set_playback_rate(lavplay_t *info, double video_fps, in
       abs(target_usec_per_frame - norm_usec_per_frame) > 50)
    {
       lavplay_msg(LAVPLAY_MSG_ERROR, info,
-         "Specified frame-rate doesn't match in mode in hardware playback (target: %d, norm: %d)",
-		target_usec_per_frame, norm_usec_per_frame);
+         "Specified frame-rate doesn't match in mode in hardware playback");
       return 0;
    }
 
@@ -1415,7 +1180,7 @@ static int lavplay_mjpeg_queue_buf(lavplay_t *info, int frame, int frame_periods
          if (ioctl(settings->video_fd, MJPIOC_QBUF_PLAY, &frame) < 0)
          {
             lavplay_msg(LAVPLAY_MSG_ERROR, info,
-               "Error queueing buffer: %s", strerror(errno));
+               "Error queueing buffer: %s", sys_errlist[errno]);
             return 0;
          }
          break;
@@ -1459,7 +1224,7 @@ static int lavplay_mjpeg_sync_buf(lavplay_t *info, struct mjpeg_sync *bs)
          if (ioctl(settings->video_fd, MJPIOC_SYNC, bs) < 0)
          {
             lavplay_msg(LAVPLAY_MSG_ERROR, info,
-               "Error syncing on a buffer: %s", strerror(errno));
+               "Error syncing on a buffer: %s", sys_errlist[errno]);
             return 0;
          }
          lavplay_msg(LAVPLAY_MSG_DEBUG, info,
@@ -1502,9 +1267,7 @@ static int lavplay_mjpeg_sync_buf(lavplay_t *info, struct mjpeg_sync *bs)
 
 static int lavplay_mjpeg_close(lavplay_t *info)
 {
-#ifdef	HAVE_V4L
    int n;
-#endif
    video_playback_setup *settings = (video_playback_setup *)info->settings;
    /*EditList *editlist = info->editlist; */
 
@@ -1520,7 +1283,7 @@ static int lavplay_mjpeg_close(lavplay_t *info)
          if (ioctl(settings->video_fd, MJPIOC_QBUF_PLAY, &n) < 0)
          {
             lavplay_msg(LAVPLAY_MSG_ERROR, info,
-               "Error de-queueing the buffers: %s", strerror(errno));
+               "Error de-queueing the buffers: %s", sys_errlist[errno]);
             return 0;
          }
          if (info->playback_mode == 'H')
@@ -1529,7 +1292,7 @@ static int lavplay_mjpeg_close(lavplay_t *info)
             if (ioctl(settings->video_fd, VIDIOCCAPTURE, &n) < 0)
             {
                lavplay_msg(LAVPLAY_MSG_ERROR, info,
-                  "Could not deactivate on-screen window: %s", strerror(errno));
+                  "Could not deactivate on-screen window: %s", sys_errlist[errno]);
                return 0;
             }
          }
@@ -1633,33 +1396,16 @@ static int lavplay_init(lavplay_t *info)
    /* init SDL if we want SDL */
    if (info->playback_mode == 'S')
    {
-      char *env = getenv("LAVPLAY_VIDEO_FORMAT");
-      settings->yuvformat = (env? ((env[0])|(env[1]<<8)|(env[2]<<16)|(env[3]<<24)): SDL_YUY2_OVERLAY);
       if (!info->sdl_width) info->sdl_width = editlist->video_width;
       if (!info->sdl_height) info->sdl_height = editlist->video_height;
       if (!lavplay_SDL_init(info))
          return 0;
-
-      settings->yuvbuff[0] = (uint8_t *)malloc(editlist->video_width * editlist->video_height * 2);
-      if (!settings->yuvbuff[0])
-      {
-         lavplay_msg (LAVPLAY_MSG_ERROR, info,
-            "Malloc error, you\'re probably out of memory");
-         return 0;
-      }
-      settings->yuvbuff[1] = settings->yuvbuff[0] + (editlist->video_width * editlist->video_height);
-      settings->yuvbuff[2] = settings->yuvbuff[0] + (editlist->video_width * editlist->video_height * 3 / 2);
-# ifdef	HAVE_LIBDV
-      settings->decoder = dv_decoder_new(0,0,0);
-      settings->decoder->quality = DV_QUALITY_BEST;
-# endif
    }
 #endif
 
-
    if (editlist->has_audio && info->audio)
    {
-      if (audio_init(0, info->use_write, (editlist->audio_chans>1), editlist->audio_bits,
+      if (audio_init(0, 0, (editlist->audio_chans>1), editlist->audio_bits,
          editlist->audio_rate)) /* increase this last argument to test sync */
       {
          lavplay_msg(LAVPLAY_MSG_ERROR, info,
@@ -1676,7 +1422,7 @@ static int lavplay_init(lavplay_t *info)
    if(seteuid(getuid()) < 0)
    {
       lavplay_msg(LAVPLAY_MSG_ERROR, info,
-         "Can't set effective user-id: %s", strerror(errno));
+         "Can't set effective user-id: %s", sys_errlist[errno]);
       return 0;
    }
 
@@ -1684,8 +1430,10 @@ static int lavplay_init(lavplay_t *info)
    for(nqueue=0;nqueue<settings->br.count;nqueue++)
    {
       if (!lavplay_queue_next_frame(info, settings->buff+nqueue* settings->br.size,
+#if defined(SUPPORT_READ_DV2) || defined(SUPPORT_READ_YUV420)
 				    (settings->data_format[nqueue] =
 				     el_video_frame_data_format(settings->current_frame_num, editlist)),
+#endif
 				    0,0,0)) break;
    }
 
@@ -1709,7 +1457,7 @@ static int lavplay_init(lavplay_t *info)
       if (ioctl(settings->video_fd, VIDIOCGCAP, &vc) < 0)
       {
          lavplay_msg(LAVPLAY_MSG_ERROR, info,
-            "Error getting device capabilities: %s", strerror(errno));
+            "Error getting device capabilities: %s", sys_errlist[errno]);
          return 0;
       }
       /* vc.maxwidth is often reported wrong - let's just keep it broken (sigh) */
@@ -1828,7 +1576,7 @@ static int lavplay_init(lavplay_t *info)
 #endif
    
    /* Set field polarity for interlaced video */
-   bp.odd_even = (editlist->video_inter == Y4M_ILACE_TOP_FIRST);
+   bp.odd_even = (editlist->video_inter==LAV_INTER_TOP_FIRST);
    /*if (info->exchange_fields) bp.odd_even = !bp.odd_even; */
    /*this is already done by the open_files() function */
 
@@ -1836,8 +1584,7 @@ static int lavplay_init(lavplay_t *info)
    if (!lavplay_mjpeg_set_params(info, &bp))
       return 0;
 
-   if (!lavplay_mjpeg_set_playback_rate(info, editlist->video_fps,
-       editlist->video_norm=='p'?0:1))
+   if (!lavplay_mjpeg_set_playback_rate(info, editlist->video_fps, bp.norm))
       return 0;
 
    return 1;
@@ -1984,8 +1731,10 @@ static void lavplay_playback_cycle(lavplay_t *info)
 	 settings->buffer_entry[frame] = editlist->frame_list[settings->current_frame_num];
 #endif
          if (!lavplay_queue_next_frame(info, settings->buff+frame*settings->br.size,
+#if defined(SUPPORT_READ_DV2) || defined(SUPPORT_READ_YUV420)
 				       (settings->data_format[frame] =
 					el_video_frame_data_format(settings->current_frame_num, editlist)),
+#endif
 				       skipv,skipa,skipi))
          {
             lavplay_change_state(info, LAVPLAY_STATE_STOP);
@@ -2055,7 +1804,6 @@ static void *lavplay_playback_thread(void *data)
    {
       SDL_FreeYUVOverlay(settings->yuv_overlay);
       SDL_Quit();
-      free(settings->yuvbuff[0]);
    }
 #endif
 
@@ -2702,11 +2450,11 @@ int lavplay_open(lavplay_t *info, char **files, int num_files)
    {
       switch (info->editlist->video_inter)
       {
-         case Y4M_ILACE_BOTTOM_FIRST:
-            info->editlist->video_inter = Y4M_ILACE_TOP_FIRST;
+         case LAV_INTER_BOTTOM_FIRST:
+            info->editlist->video_inter = LAV_INTER_TOP_FIRST;
             break;
-         case Y4M_ILACE_TOP_FIRST:
-            info->editlist->video_inter = Y4M_ILACE_BOTTOM_FIRST;
+         case LAV_INTER_TOP_FIRST:
+            info->editlist->video_inter = LAV_INTER_BOTTOM_FIRST;
             break;
          default:
             lavplay_msg(LAVPLAY_MSG_WARNING, info,

@@ -35,10 +35,6 @@ struct benchmark_stats {
     struct benchmark_times times[2];
 };
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 int calibrate_benchmark(double precision, double increment, int timelimit,
                         int reqpasses, int *passes, int *iterations,
                         int *calibration, struct timeval *time,
@@ -59,9 +55,6 @@ void print_benchmark_stats(const char* name, struct benchmark_stats *stats);
 
 void print_benchmark_statistics();
 
-#ifdef __cplusplus
-}
-#endif
 
 #define BENCHMARK_TIME(i,iterations,do,start,end,time)                       \
   gettimeofday((start), (struct timezone*)0);                                \
@@ -74,7 +67,7 @@ void print_benchmark_statistics();
 
 
 #define ALTIVEC_TEST_BENCHMARK(name,ret,defargs,pfmt,args)                   \
-ret ALTIVEC_TEST_WITH(name) defargs;                                         \
+extern ret ALTIVEC_TEST_WITH(name) defargs;                                  \
 struct benchmark_stats name##_altivec_benchmark_stats;                       \
 ret name##_altivec_benchmark defargs {                                       \
   int i, j, passes, done;                                                    \
@@ -83,7 +76,6 @@ ret name##_altivec_benchmark defargs {                                       \
   ret (*pfuncs[2]) defargs;                                                  \
   ret (*pfunc) defargs;                                                      \
   int iterations, calibration[2];                                            \
-  AVRETDECL(ret,retval);                                                     \
                                                                              \
   if (name##_altivec_benchmark_stats.counter % BENCHMARK_FREQUENCY == 0 &&   \
       name##_altivec_benchmark_stats.benchmark_runs < BENCHMARK_MAX_RUNS)    \
@@ -148,6 +140,5 @@ ret name##_altivec_benchmark defargs {                                       \
   }                                                                          \
   name##_altivec_benchmark_stats.counter++;                                  \
                                                                              \
-  AVRETSET(ret,retval,name##_altivec(args));                                 \
-  AVRETURN(ret,retval);                                                      \
+  AVRET(ret,name##_altivec(args));                                           \
 }

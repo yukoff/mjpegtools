@@ -1,4 +1,4 @@
-/* motionsearch.c, block motion estimation for mpeg2enc  */
+/* motion.c, motion estimation                                              */
 
 
 /* (C) 2000/2001 Andrew Stevens */
@@ -20,23 +20,16 @@
  *
  */
 
-#include "config.h"
-#include <limits.h>
+#include <config.h>
+#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <math.h>
+#include <limits.h>
+#include "math.h"
 #include "cpu_accel.h"
 #include "fastintfns.h"
 #include "motionsearch.h"
 #include "mjpeg_logging.h"
 
-/*
- * Define prototypes so as to avoid warning errors at compile time
-*/
-
-void sub_mean_reduction(me_result_set *, int, int *);
-void subsample_image(uint8_t *,int ,uint8_t *,uint8_t *);
-void variance(uint8_t *,int ,int, unsigned int *,unsigned int *);
 
 /* The AltiVec code needs access to symbols during benchmarking
  * and verification.
@@ -50,23 +43,64 @@ void variance(uint8_t *,int ,int, unsigned int *,unsigned int *);
 #  endif
 #endif
 
+#if defined(HAVE_ASM_MMX) && defined(HAVE_ASM_NASM)
+
+#include "mblock_sub44_sads_x86.h"
+
+static int (*pmblocks_sub44_mests)( uint8_t *blk,  uint8_t *ref,
+							int ilow, int jlow,
+							int ihigh, int jhigh, 
+							int h, int rowstride, 
+							int threshold,
+							me_result_s *resvec);
 
 
-#if defined(HAVE_ASM_MMX)
-#include "mmxsse/mmxsse_motion.h"
+void mblock_sub22_nearest4_sads_mmxe(uint8_t *blk1,uint8_t *blk2,
+				     int frowstride,int fh, int* resvec) 
+                                     __asm__ ("mblock_sub22_nearest4_sads_mmxe");
+
+void mblock_nearest4_sads_mmxe(uint8_t *blk1, uint8_t *blk2, 
+			       int rowstride, int h, int *resvec)
+                               __asm__ ("mblock_nearest4_sads_mmxe");
+
+int sad_00_mmxe(uint8_t *blk1, uint8_t *blk2, int rowstride, int h, int distlim) __asm__ ("sad_00_mmxe");
+int sad_01_mmxe(uint8_t *blk1, uint8_t *blk2, int rowstride, int h) __asm__ ("sad_01_mmxe");
+int sad_10_mmxe(uint8_t *blk1, uint8_t *blk2, int rowstride, int h) __asm__ ("sad_10_mmxe");
+int sad_11_mmxe(uint8_t *blk1, uint8_t *blk2, int rowstride, int h) __asm__ ("sad_11_mmxe");
+
+
+int sad_sub22_mmxe ( uint8_t *blk1, uint8_t *blk2,  int frowstride, int fh) __asm__ ("sad_sub22_mmxe");
+int sad_sub44_mmxe ( uint8_t *blk1, uint8_t *blk2,  int qrowstride, int qh) __asm__ ("sad_sub44_mmxe");
+int sumsq_mmx( uint8_t *blk1, uint8_t *blk2,
+	       int rowstride, int hx, int hy, int h) __asm__ ("sumsq_mmx");
+int sumsq_sub22_mmx( uint8_t *blk1, uint8_t *blk2,
+		     int rowstride, int h) __asm__ ("sumsq_sub22_mmx");
+int bsumsq_sub22_mmx( uint8_t *blk1f, uint8_t *blk1b, 
+		      uint8_t *blk2,
+		      int rowstride, int h) __asm__ ("bsumsq_sub22_mmx");
+int bsumsq_mmx (uint8_t *pf, uint8_t *pb,
+		uint8_t *p2, int rowstride,
+		int hxf, int hyf, int hxb, int hyb, int h) __asm__ ("bsumsq_mmx");
+int bsad_mmx (uint8_t *pf, uint8_t *pb,
+	      uint8_t *p2, int rowstride,
+	      int hxf, int hyf, int hxb, int hyb, int h) __asm__ ("bsad_mmx");
+
+int variance_mmx( uint8_t *p, int size,	int rowstride) __asm__ ("variance_mmx");
+
+int sad_00_mmx ( uint8_t *blk1, uint8_t *blk2,  int rowstride, int h, int distlim) __asm__ ("sad_00_mmx");
+int sad_01_mmx(uint8_t *blk1, uint8_t *blk2, int rowstride, int h) __asm__ ("sad_01_mmx");
+int sad_10_mmx(uint8_t *blk1, uint8_t *blk2, int rowstride, int h) __asm__ ("sad_10_mmx");
+int sad_11_mmx(uint8_t *blk1, uint8_t *blk2, int rowstride, int h) __asm__ ("sad_11_mmx");
+int sad_sub22_mmx ( uint8_t *blk1, uint8_t *blk2,  int frowstride, int fh) __asm__ ("sad_sub22_mmx");
+int sad_sub44_mmx (uint8_t *blk1, uint8_t *blk2,  int qrowstride, int qh) __asm__ ("sad_sub44_mmx");
+
 #endif
+
 
 /*
  * Function pointers for selecting CPU specific implementations
  *
  */
-
-int (*pmblocks_sub44_mests)( uint8_t *blk,  uint8_t *ref,
-							 int ilow, int jlow,
-							 int ihigh, int jhigh, 
-							 int h, int rowstride, 
-							 int threshold,
-							 me_result_s *resvec);
 
 void (*pfind_best_one_pel)( me_result_set *sub22set,
 							uint8_t *org, uint8_t *blk,
@@ -98,8 +132,7 @@ int (*pbsumsq_sub22)( uint8_t *blk1f, uint8_t *blk1b,
 						  uint8_t *blk2,
 						  int rowstride, int h);
 
-void (*pvariance)(uint8_t *mb, int size, int rowstride, 
-				 uint32_t *p_var, uint32_t *p_mean);
+int (*pvariance)(uint8_t *mb, int size, int rowstride);
 
 
 int (*psad_sub22) ( uint8_t *blk1, uint8_t *blk2,  int frowstride, int fh);
@@ -145,17 +178,19 @@ int round_search_radius( int radius )
 */
 
 void sub_mean_reduction( me_result_set *matchset, 
-						 int times,
-						 int *minweight_res)
+								int times,
+							    int *minweight_res)
 {
 	me_result_s *matches = matchset->mests;
 	int len = matchset->len;
 	int i,j;
 	int weight_sum;
 	int mean_weight;
-	if( len <= 1 )
+	int min_weight = 100000;
+	if( len == 0 )
 	{
-		*minweight_res = (len==0) ? 100000 : matches[0].weight;
+		*minweight_res = 100000;
+		matchset->len = 0;
 		return;
 	}
 
@@ -174,6 +209,10 @@ void sub_mean_reduction( me_result_set *matchset,
 		{
 			if( matches[i].weight <= mean_weight )
 			{
+				if( times == 1)
+				{
+					min_weight = matches[i].weight ;
+				}
 				matches[j] = matches[i];
 				++j;
 			}
@@ -273,7 +312,7 @@ STATIC int build_sub44_mests( me_result_set *sub44set,
 				sub44_mests[sub44_num_mests].x = i;
 				sub44_mests[sub44_num_mests].y = j;
 				sub44_mests[sub44_num_mests].weight = s1 + 
-					(intmax(abs(i-i0), abs(j-j0))<<1);
+					(intmax(intabs(i-i0),intabs(j-j0))<<1);
 				++sub44_num_mests;
 			}
 			s44orgblk += 1;
@@ -287,6 +326,45 @@ STATIC int build_sub44_mests( me_result_set *sub44set,
 
 	return sub44set->len;
 }
+
+#if defined(HAVE_ASM_MMX) && defined(HAVE_ASM_NASM)
+
+static int build_sub44_mests_mmx( me_result_set *sub44set,
+								   int ilow, int jlow, int ihigh, int jhigh, 
+								   int i0, int j0,
+								   int null_ctl_sad,
+								   uint8_t *s44org, uint8_t *s44blk, 
+								   int qrowstride, int qh,
+								   int reduction)
+{
+	uint8_t *s44orgblk;
+	me_result_s *sub44_mests = sub44set->mests;
+	int istrt = ilow-i0;
+	int jstrt = jlow-j0;
+	int iend = ihigh-i0;
+	int jend = jhigh-j0;
+	int mean_weight;
+	int threshold;
+
+	
+	threshold = 6*null_ctl_sad / (4*4*reduction);
+	s44orgblk = s44org+(ilow>>2)+qrowstride*(jlow>>2);
+	
+	sub44set->len = (*pmblocks_sub44_mests)( s44orgblk, s44blk,
+											  istrt, jstrt,
+											  iend, jend, 
+											  qh, qrowstride, 
+											  threshold,
+											  sub44_mests);
+	
+   /* If we're really pushing quality we reduce once otherwise twice. */
+			
+	sub_mean_reduction( sub44set, 1+(reduction>1),  &mean_weight);
+
+
+	return sub44set->len;
+}
+#endif
 
 
 
@@ -305,7 +383,8 @@ STATIC int build_sub44_mests( me_result_set *sub44set,
  * a reference SAD passed as a parameter and then reduction discard passes
  * are made.
  *
- */
+ * A super-fast version using MMX assembly code for X86 follows.
+ * Other CPU's could/should be handled the same way.  */
 
 
 STATIC int build_sub22_mests( me_result_set *sub44set,
@@ -338,7 +417,7 @@ STATIC int build_sub22_mests( me_result_set *sub44set,
 			if( x <= ilim && y <= jlim )
 			{	
 				s = (*psad_sub22)( s22orgblk,s22blk,frowstride,fh)+
-					(intmax(abs(x), abs(y))<<3);
+					(intmax(intabs(x),intabs(y))<<3);
 				if( s < threshold )
 				{
 					me_result_s *mc = &sub22set->mests[sub22set->len];
@@ -369,6 +448,77 @@ STATIC int build_sub22_mests( me_result_set *sub44set,
 	return sub22set->len;
 }
 
+#if defined(HAVE_ASM_MMX) && defined(HAVE_ASM_NASM) 
+static int build_sub22_mests_mmxe( me_result_set *sub44set,
+							 me_result_set *sub22set,
+							 int i0,  int j0, int ihigh, int jhigh, 
+							 int null_ctl_sad,
+							 uint8_t *s22org,  uint8_t *s22blk, 
+							 int frowstride, int fh,
+							 int reduction)
+{
+	int i,k,s;
+	int threshold = 6*null_ctl_sad / (2 * 2*reduction);
+
+	int min_weight;
+	int ilim = ihigh-i0;
+	int jlim = jhigh-j0;
+	int x,y;
+	uint8_t *s22orgblk;
+	int resvec[4];
+
+	/* TODO: The calculation of the lstrow offset really belongs in
+       asm code... */
+	int lstrow=(fh-1)*frowstride;
+
+	sub22set->len = 0;
+	for( k = 0; k < sub44set->len; ++k )
+	{
+
+		x = sub44set->mests[k].x;
+		y = sub44set->mests[k].y;
+
+		s22orgblk =  s22org +((y+j0)>>1)*frowstride +((x+i0)>>1);
+		/*
+		  Get SAD for 2*2 subsampled macroblocks: orgblk,orgblk(+2,0),
+		  orgblk(0,+2), and orgblk(+2,+2) Done all in one go to reduce
+		  memory bandwidth demand
+		*/
+		mblock_sub22_nearest4_sads_mmxe(s22orgblk+lstrow, s22blk+lstrow, frowstride, fh, resvec);
+		for( i = 0; i < 4; ++i )
+		{
+			if( x <= ilim && y <= jlim )
+			{	
+				s =resvec[i]+(intmax(intabs(x),intabs(y))<<3);
+				if( s < threshold )
+				{
+					me_result_s *mc = &sub22set->mests[sub22set->len];
+					mc->x = (int8_t)x;
+					mc->y = (int8_t)y;
+					mc->weight = s;
+					++(sub22set->len);
+				}
+			}
+
+			if( i == 1 )
+			{
+				x -= 2;
+				y += 2;
+			}
+			else
+			{
+				x += 2;
+			}
+		}
+
+	}
+
+	
+	sub_mean_reduction( sub22set, reduction, &min_weight );
+	return sub22set->len;
+}
+
+#endif
 
 /*
  * Search for the best 1-pel match within 1-pel of a good 2*2-pel
@@ -402,7 +552,8 @@ STATIC void find_best_one_pel( me_result_set *sub22set,
 
 		matchrec = sub22set->mests[k];
 		orgblk = org + (i0+matchrec.x)+rowstride*(j0+matchrec.y);
-		penalty = (abs(matchrec.x) + abs(matchrec.y))<<3;
+		penalty = intmax(intabs(matchrec.x),intabs(matchrec.y))<<5;
+
 		for( i = 0; i < 4; ++i )
 		{
 			if( matchrec.x <= ilim && matchrec.y <= jlim )
@@ -433,6 +584,71 @@ STATIC void find_best_one_pel( me_result_set *sub22set,
 	*best_so_far = minpos;
 }
 
+#if defined(HAVE_ASM_MMX) && defined(HAVE_ASM_NASM) 
+static void find_best_one_pel_mmxe( me_result_set *sub22set,
+							 uint8_t *org, uint8_t *blk,
+							 int i0, int j0,
+							 int ihigh, int jhigh,
+							 int rowstride, int h,
+							 me_result_s *best_so_far
+	)
+
+{
+	int i,k;
+	int d;
+	me_result_s minpos = *best_so_far;
+	int ilim = ihigh-i0;
+	int jlim = jhigh-j0;
+	int dmin = INT_MAX;
+	uint8_t *orgblk;
+	int penalty;
+	me_result_s matchrec;
+	int resvec[4];
+
+	for( k = 0; k < sub22set->len; ++k )
+	{	
+		matchrec = sub22set->mests[k];
+		orgblk = org + (i0+matchrec.x)+rowstride*(j0+matchrec.y);
+		penalty = intmax(abs(matchrec.x),abs(matchrec.y))<<5;
+		
+		/* Get SAD for macroblocks: 	orgblk,orgblk(+1,0),
+		   orgblk(0,+1), and orgblk(+1,+1)
+		   Done all in one go to reduce memory bandwidth demand
+		*/
+		mblock_nearest4_sads_mmxe(orgblk,blk,rowstride,h,
+		resvec);
+
+		for( i = 0; i < 4; ++i )
+		{
+			if( matchrec.x <= ilim && matchrec.y <= jlim )
+			{
+		
+				d = penalty+resvec[i];
+				if (d<dmin)
+				{
+					dmin = d;
+					minpos = matchrec;
+				}
+			}
+			if( i == 1 )
+			{
+				orgblk += rowstride-1;
+				matchrec.x -= 1;
+				matchrec.y += 1;
+			}
+			else
+			{
+				orgblk += 1;
+				matchrec.x += 1;
+			}
+		}
+	}
+
+	minpos.weight = (uint16_t)intmin(255*255, dmin);
+	*best_so_far = minpos;
+
+}
+#endif 
  
 
 /* 
@@ -494,7 +710,7 @@ STATIC int sad_01(uint8_t *blk1,uint8_t *blk2,int rowstride, int h)
 		{
 
 			v = ((unsigned int)(p1[i]+p1[i+1]+1)>>1) - p2[i];
-			s += abs(v);
+			s+=intabs(v);
 		}
 		p1+= rowstride;
 		p2+= rowstride;
@@ -518,7 +734,7 @@ STATIC int sad_10(uint8_t *blk1,uint8_t *blk2, int rowstride, int h)
 		for (i=0; i<16; i++)
 		{
 			v = ((unsigned int)(p1[i]+p1a[i]+1)>>1) - p2[i];
-			s += abs(v);
+			s+= intabs(v);
 		}
 		p1 = p1a;
 		p1a+= rowstride;
@@ -545,7 +761,7 @@ STATIC int sad_11(uint8_t *blk1,uint8_t *blk2, int rowstride, int h)
 		for (i=0; i<16; i++)
 		{
 			v = ((unsigned int)((p1[i]+p1[i+1])+(p1a[i]+p1a[i+1])+2)>>2) - p2[i];
-			s += abs(v);
+			s+=intabs(v);
 		}
 		p1 = p1a;
 		p1a+= rowstride;
@@ -937,11 +1153,11 @@ STATIC int bsumsq(pf,pb,p2,rowstride,hxf,hyf,hxb,hyb,h)
  * rowstride: distance (in bytes) of vertically adjacent pels
  * SIZE is a multiple of 8.
  */
-void variance(uint8_t *p, int size,	int rowstride,
-			 unsigned int *p_var, unsigned int *p_mean)
+STATIC int variance(uint8_t *p, int size,	int rowstride)
 {
 	int i,j;
 	unsigned int v,s,s2;
+	int var;
 	s = s2 = 0;
 
 	for (j=0; j<size; j++)
@@ -954,8 +1170,9 @@ void variance(uint8_t *p, int size,	int rowstride,
 		}
 		p+= rowstride-size;
 	}
-	*p_mean = s/(size*size);
-	*p_var = s2 - (s*s)/(size*size);
+	var = s2 - (s*s)/(size*size);
+
+	return var;
 }
 
 
@@ -991,8 +1208,47 @@ void init_motion_search(void)
 	pbuild_sub44_mests = build_sub44_mests;
 	psubsample_image = subsample_image;
 
-#if defined(HAVE_ASM_MMX)
-	enable_mmxsse_motion(cpucap);
+#if defined(HAVE_ASM_MMX) && defined(HAVE_ASM_NASM)
+	if(cpucap & ACCEL_X86_MMXEXT ) /* AMD MMX or SSE... */
+	{
+		mjpeg_info( "SETTING EXTENDED MMX for MOTION!");
+		psad_sub22 = sad_sub22_mmxe;
+		psad_sub44 = sad_sub44_mmxe;
+		psad_00 = sad_00_mmxe;
+		psad_01 = sad_01_mmxe;
+		psad_10 = sad_10_mmxe;
+		psad_11 = sad_11_mmxe;
+		pbsad = bsad_mmx;
+		pvariance = variance_mmx;
+		psumsq = sumsq_mmx;
+		pbsumsq = bsumsq_mmx;
+		psumsq_sub22 = sumsq_sub22_mmx;
+		pbsumsq_sub22 = bsumsq_sub22_mmx;
+		pfind_best_one_pel = find_best_one_pel_mmxe;
+		pbuild_sub22_mests	= build_sub22_mests_mmxe;
+		pbuild_sub44_mests	= build_sub44_mests_mmx;
+		pmblocks_sub44_mests = mblocks_sub44_mests_mmxe;
+	}
+	else if(cpucap & ACCEL_X86_MMX) /* Ordinary MMX CPU */
+	{
+		mjpeg_info( "SETTING MMX for MOTION!");
+		psad_sub22 = sad_sub22_mmx;
+		psad_sub44 = sad_sub44_mmx;
+		psad_00 = sad_00_mmx;
+		psad_01 = sad_01_mmx;
+		psad_10 = sad_10_mmx;
+		psad_11 = sad_11_mmx;
+		pbsad = bsad_mmx;
+		pvariance = variance_mmx;
+		psumsq = sumsq_mmx;
+		pbsumsq = bsumsq_mmx;
+		psumsq_sub22 = sumsq_sub22_mmx;
+		pbsumsq_sub22 = bsumsq_sub22_mmx;
+		pfind_best_one_pel = find_best_one_pel;
+		pbuild_sub22_mests	= build_sub22_mests;
+		pbuild_sub44_mests	= build_sub44_mests_mmx;
+		pmblocks_sub44_mests = mblocks_sub44_mests_mmx;
+	}
 #endif
 #ifdef HAVE_ALTIVEC
 	if (cpucap > 0) {
@@ -1000,43 +1256,3 @@ void init_motion_search(void)
 	}
 #endif
 }
-
-/*
- * In some cases it is necessary to not use the SIMD routines even if they
- * are available.   This can be due to a program not being able to use 
- * correctly aligned buffers OR limitations in the SIMD routines.  The 
- * yuvdeinterlace program is known to crash on PPC systems due to the sad_00 
- * function requiring 16 byte alignment which yuvdeinterlace can not guarantee.
- *
- * Rather than completely disabling (via the MJPEGTOOLS_SIMD_DISABLE environment
- * variable) Altivec sad_00 for all programs in a pipeline the code below
- * can be used to selectively reset specific functions back to the C reference
- * code specific.
-*/
-
-#define SIMD_RESET(x) \
-if (!strcmp(#x, name) && simd_name_ok( name )) \
-        { \
-	mjpeg_info(" Use non-SIMD " #x); \
-	p##x = x; \
-	}
-
-void reset_motion_simd(char *name)
-	{
-	SIMD_RESET(sad_00);
-	SIMD_RESET(sad_01);
-	SIMD_RESET(sad_10);
-	SIMD_RESET(sad_11);
-	SIMD_RESET(sad_sub22);
-	SIMD_RESET(sad_sub44);
-	SIMD_RESET(bsad);
-	SIMD_RESET(variance);
-	SIMD_RESET(sumsq);
-	SIMD_RESET(bsumsq);
-	SIMD_RESET(sumsq_sub22);
-	SIMD_RESET(bsumsq_sub22);
-	SIMD_RESET(find_best_one_pel);
-	SIMD_RESET(build_sub22_mests);
-	SIMD_RESET(build_sub44_mests);
-	SIMD_RESET(subsample_image);
-	}

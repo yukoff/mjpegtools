@@ -17,8 +17,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
+#ifdef HAVE_ALTIVEC_H
+#include <altivec.h>
 #endif
 
 #include "altivec_motion.h"
@@ -28,10 +28,6 @@
 /* #define AMBER_ENABLE */
 #include "amber.h"
 
-#ifdef HAVE_ALTIVEC_H
-/* include last to ensure AltiVec type semantics, especially for bool. */
-#include <altivec.h>
-#endif
 
 /*
  * absolute difference error between a (16*h) block and a bidirectional
@@ -85,23 +81,27 @@ int bsad_altivec(BSAD_PDECL)
 
 
 #ifdef ALTIVEC_VERIFY
+    if (hxf != 0 && hxf != 1)
+	mjpeg_error_exit1("bsad: hxf != [0|1], (hxf=%d)", hxf);
+
+    if (hyf != 0 && hyf != 1)
+	mjpeg_error_exit1("bsad: hyf != [0|1], (hyf=%d)", hyf);
+
+    if (hxb != 0 && hxb != 1)
+	mjpeg_error_exit1("bsad: hxb != [0|1], (hxb=%d)", hxb);
+
+    if (hyb != 0 && hyb != 1)
+	mjpeg_error_exit1("bsad: hyb != [0|1], (hyb=%d)", hyb);
+
     if (NOT_VECTOR_ALIGNED(p2))
 	mjpeg_error_exit1("bsad: p2 %% 16 != 0, (0x%X)", p2);
+
     if (NOT_VECTOR_ALIGNED(rowstride))
 	mjpeg_error_exit1("bsad: rowstride %% 16 != 0, (%d)", rowstride);
 
-    if (hxf != 0 && hxf != 1)
-	mjpeg_error_exit1("bsad: hxf != [0|1], (hxf=%d)", hxf);
-    if (hyf != 0 && hyf != 1)
-	mjpeg_error_exit1("bsad: hyf != [0|1], (hyf=%d)", hyf);
-    if (hxb != 0 && hxb != 1)
-	mjpeg_error_exit1("bsad: hxb != [0|1], (hxb=%d)", hxb);
-    if (hyb != 0 && hyb != 1)
-	mjpeg_error_exit1("bsad: hyb != [0|1], (hyb=%d)", hyb);
-#endif
-
     if (h != 8 && h != 16)
 	mjpeg_error_exit1("bsad: h != [8|16], (%d)", h);
+#endif
 
     AMBER_START;
 
@@ -153,36 +153,36 @@ int bsad_altivec(BSAD_PDECL)
 	pby += rowstride;
 
 	/* (unsigned short[]) pf[0-7] */
-	fH = vu16(vec_mergeh(zero, vf));
+	vu8(fH) = vec_mergeh(zero, vf);
 
 	/* (unsigned short[]) pf[8-15] */
-	fL = vu16(vec_mergel(zero, vf));
+	vu8(fL) = vec_mergel(zero, vf);
 
 	/* (unsigned short[]) pfa[0-7] */
-	tH = vu16(vec_mergeh(zero, vfa));
+	vu8(tH) = vec_mergeh(zero, vfa);
 
 	/* (unsigned short[]) pfa[8-15] */
-	tL = vu16(vec_mergel(zero, vfa));
+	vu8(tL) = vec_mergel(zero, vfa);
 
 	/* pf[i] + pfa[i] */
 	fH = vec_add(fH, tH);
 	fL = vec_add(fL, tL);
 
 	/* (unsigned short[]) pfb[0-7] */
-	tH = vu16(vec_mergeh(zero, vfb));
+	vu8(tH) = vec_mergeh(zero, vfb);
 
 	/* (unsigned short[]) pfb[8-15] */
-	tL = vu16(vec_mergel(zero, vfb));
+	vu8(tL) = vec_mergel(zero, vfb);
 
 	/* (pf[i]+pfa[i]) + pfb[i] */
 	fH = vec_add(fH, tH);
 	fL = vec_add(fL, tL);
 
 	/* (unsigned short[]) pfc[0-7] */
-	tH = vu16(vec_mergeh(zero, vfc));
+	vu8(tH) = vec_mergeh(zero, vfc);
 
 	/* (unsigned short[]) pfc[8-15] */
-	tL = vu16(vec_mergel(zero, vfc));
+	vu8(tL) = vec_mergel(zero, vfc);
 
 	/* (pf[i]+pfa[i]+pfb[i]) + pfc[i] */
 	fH = vec_add(fH, tH);
@@ -216,36 +216,36 @@ int bsad_altivec(BSAD_PDECL)
 
 
 	/* (unsigned short[]) pb[0-7] */
-	bH = vu16(vec_mergeh(zero, vb));
+	vu8(bH) = vec_mergeh(zero, vb);
 
 	/* (unsigned short[]) pb[8-15] */
-	bL = vu16(vec_mergel(zero, vb));
+	vu8(bL) = vec_mergel(zero, vb);
 
 	/* (unsigned short[]) pba[0-7] */
-	tH = vu16(vec_mergeh(zero, vba));
+	vu8(tH) = vec_mergeh(zero, vba);
 
 	/* (unsigned short[]) pba[8-15] */
-	tL = vu16(vec_mergel(zero, vba));
+	vu8(tL) = vec_mergel(zero, vba);
 
 	/* pb[i] + pba[i] */
 	bH = vec_add(bH, tH);
 	bL = vec_add(bL, tL);
 
 	/* (unsigned short[]) pbb[0-7] */
-	tH = vu16(vec_mergeh(zero, vbb));
+	vu8(tH) = vec_mergeh(zero, vbb);
 
 	/* (unsigned short[]) pbb[8-15] */
-	tL = vu16(vec_mergel(zero, vbb));
+	vu8(tL) = vec_mergel(zero, vbb);
 
 	/* (pb[i]+pba[i]) + pbb[i] */
 	bH = vec_add(bH, tH);
 	bL = vec_add(bL, tL);
 
 	/* (unsigned short[]) pbc[0-7] */
-	tH = vu16(vec_mergeh(zero, vbc));
+	vu8(tH) = vec_mergeh(zero, vbc);
 
 	/* (unsigned short[]) pbc[8-15] */
-	tL = vu16(vec_mergel(zero, vbc));
+	vu8(tL) = vec_mergel(zero, vbc);
 
 	/* (pb[i]+pba[i]+pbb[i]) + pbc[i] */
 	bH = vec_add(bH, tH);
@@ -286,7 +286,7 @@ int bsad_altivec(BSAD_PDECL)
 	/* d = abs( ((((pf[i]+pfa[i]+pfb[i]+pfc[i]+2)>>2)+
 	 *            ((pb[i]+pba[i]+pbb[i]+pbc[i]+2)>>2)+1)>>1) - p2[i] )
          */
-	tH = vu16(vec_packsu(tH, tL));
+	vu8(tH) = vec_packsu(tH, tL);
 	min = vec_min(vu8(tH), lR);
 	max = vec_max(vu8(tH), lR);
 	dif = vec_sub(max, min);
@@ -309,36 +309,36 @@ int bsad_altivec(BSAD_PDECL)
 
 
     /* (unsigned short[]) pf[0-7] */
-    fH = vu16(vec_mergeh(zero, vf));
+    vu8(fH) = vec_mergeh(zero, vf);
 
     /* (unsigned short[]) pf[8-15] */
-    fL = vu16(vec_mergel(zero, vf));
+    vu8(fL) = vec_mergel(zero, vf);
 
     /* (unsigned short[]) pfa[0-7] */
-    tH = vu16(vec_mergeh(zero, vfa));
+    vu8(tH) = vec_mergeh(zero, vfa);
 
     /* (unsigned short[]) pfa[8-15] */
-    tL = vu16(vec_mergel(zero, vfa));
+    vu8(tL) = vec_mergel(zero, vfa);
 
     /* pf[i] + pfa[i] */
     fH = vec_add(fH, tH);
     fL = vec_add(fL, tL);
 
     /* (unsigned short[]) pfb[0-7] */
-    tH = vu16(vec_mergeh(zero, vfb));
+    vu8(tH) = vec_mergeh(zero, vfb);
 
     /* (unsigned short[]) pfb[8-15] */
-    tL = vu16(vec_mergel(zero, vfb));
+    vu8(tL) = vec_mergel(zero, vfb);
 
     /* (pf[i]+pfa[i]) + pfb[i] */
     fH = vec_add(fH, tH);
     fL = vec_add(fL, tL);
 
     /* (unsigned short[]) pfc[0-7] */
-    tH = vu16(vec_mergeh(zero, vfc));
+    vu8(tH) = vec_mergeh(zero, vfc);
 
     /* (unsigned short[]) pfc[8-15] */
-    tL = vu16(vec_mergel(zero, vfc));
+    vu8(tL) = vec_mergel(zero, vfc);
 
     /* (pf[i]+pfa[i]+pfb[i]) + pfc[i] */
     fH = vec_add(fH, tH);
@@ -364,36 +364,36 @@ int bsad_altivec(BSAD_PDECL)
 
 
     /* (unsigned short[]) pb[0-7] */
-    bH = vu16(vec_mergeh(zero, vb));
+    vu8(bH) = vec_mergeh(zero, vb);
 
     /* (unsigned short[]) pb[8-15] */
-    bL = vu16(vec_mergel(zero, vb));
+    vu8(bL) = vec_mergel(zero, vb);
 
     /* (unsigned short[]) pba[0-7] */
-    tH = vu16(vec_mergeh(zero, vba));
+    vu8(tH) = vec_mergeh(zero, vba);
 
     /* (unsigned short[]) pba[8-15] */
-    tL = vu16(vec_mergel(zero, vba));
+    vu8(tL) = vec_mergel(zero, vba);
 
     /* pb[i] + pba[i] */
     bH = vec_add(bH, tH);
     bL = vec_add(bL, tL);
 
     /* (unsigned short[]) pbb[0-7] */
-    tH = vu16(vec_mergeh(zero, vbb));
+    vu8(tH) = vec_mergeh(zero, vbb);
 
     /* (unsigned short[]) pbb[8-15] */
-    tL = vu16(vec_mergel(zero, vbb));
+    vu8(tL) = vec_mergel(zero, vbb);
 
     /* (pb[i]+pba[i]) + pbb[i] */
     bH = vec_add(bH, tH);
     bL = vec_add(bL, tL);
 
     /* (unsigned short[]) pbc[0-7] */
-    tH = vu16(vec_mergeh(zero, vbc));
+    vu8(tH) = vec_mergeh(zero, vbc);
 
     /* (unsigned short[]) pbc[8-15] */
-    tL = vu16(vec_mergel(zero, vbc));
+    vu8(tL) = vec_mergel(zero, vbc);
 
     /* (pb[i]+pba[i]+pbb[i]) + pbc[i] */
     bH = vec_add(bH, tH);
@@ -434,7 +434,7 @@ int bsad_altivec(BSAD_PDECL)
     /* d = abs( ((((pf[i]+pfa[i]+pfb[i]+pfc[i]+2)>>2)+
      *            ((pb[i]+pba[i]+pbb[i]+pbc[i]+2)>>2)+1)>>1) - p2[i] )
      */
-    tH = vu16(vec_packsu(tH, tL));
+    vu8(tH) = vec_packsu(tH, tL);
     min = vec_min(vu8(tH), lR);
     max = vec_max(vu8(tH), lR);
     dif = vec_sub(max, min);

@@ -17,22 +17,17 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
+#ifdef HAVE_ALTIVEC_H
+#include <altivec.h>
 #endif
 
 #include "altivec_motion.h"
 #include "vectorize.h"
-#include <math.h>
+#include "../fastintfns.h"
 #include "../mjpeg_logging.h"
 
 /* #define AMBER_ENABLE */
 #include "amber.h"
-
-#ifdef HAVE_ALTIVEC_H
-/* include last to ensure AltiVec type semantics, especially for bool. */
-#include <altivec.h>
-#endif
 
 
 #define SUB_PRED_PDECL uint8_t *pred, uint8_t *cur, int lx, int16_t *blk
@@ -56,25 +51,29 @@ void sub_pred_altivec(SUB_PRED_PDECL)
     vector signed short blkA, blkB;
 
 
-#ifdef ALTIVEC_VERIFY
-#ifdef ALTIVEC_DST
-    if (lx & (~0xffff) != 0)
-	mjpeg_error_exit1("sub_pred: lx > vec_dst range", lx);
-#endif
+#ifdef ALTIVEC_VERIFY /* {{{ */
+    if ((((unsigned long)pred) & 0x7) != 0)
+	mjpeg_error_exit1("sub_pred: pred %% 8 != 0, (0x%X)", pred);
+
+    if ((((unsigned long)cur) & 0x7) != 0)
+	mjpeg_error_exit1("sub_pred: cur %% 8 != 0, (0x%X)", cur);
 
     if (NOT_VECTOR_ALIGNED(lx))
 	mjpeg_error_exit1("sub_pred: lx %% 16 != 0, (%d)", lx);
+
     if (NOT_VECTOR_ALIGNED(blk))
 	mjpeg_error_exit1("sub_pred: blk %% 16 != 0, (%d)", blk);
 
     if (((unsigned long)pred & 0xf) != ((unsigned long)cur & 0xf))
 	mjpeg_error_exit1("sub_pred: (pred(0x%X) %% 16) != (cur(0x%X) %% 16)",
 	    pred, cur);
-    if ((((unsigned long)pred) & 0x7) != 0)
-	mjpeg_error_exit1("sub_pred: pred %% 8 != 0, (0x%X)", pred);
-    if ((((unsigned long)cur) & 0x7) != 0)
-	mjpeg_error_exit1("sub_pred: cur %% 8 != 0, (0x%X)", cur);
+
+#ifdef ALTIVEC_DST
+    if (lx & (~0xffff) != 0)
+	mjpeg_error_exit1("sub_pred: lx > vec_dst range", lx);
 #endif
+#endif /* }}} */
+
 
 /* A->B, B->A expand differently depending on input */
 #define ABBA(symbol,ab)		_ABBA(ABBA_##ab,symbol) /* {{{ */
@@ -175,13 +174,13 @@ void sub_pred_altivec_verify(SUB_PRED_PDECL)
 
     sub_pred_altivec(SUB_PRED_ARGS);
     for (checksum1 = i = 0; i < 8*8; i++)
-	checksum1 += abs(blk[i]);
+	checksum1 += intabs(blk[i]);
 
     memcpy(blkcpy, blk, 8*8*sizeof(short));
 
     ALTIVEC_TEST_WITH(sub_pred)(SUB_PRED_ARGS);
     for (checksum2 = i = 0; i < 8*8; i++)
-	checksum2 += abs(blk[i]);
+	checksum2 += intabs(blk[i]);
 
     if (checksum1 != checksum2) {
 	mjpeg_debug("sub_pred(" SUB_PRED_PFMT ")", SUB_PRED_ARGS);

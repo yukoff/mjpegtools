@@ -1,55 +1,48 @@
 # Process this file with Automake to produce Makefile.in
 
+
 if HAVE_ALTIVEC
 SUBDIRS = altivec
 endif
-if HAVE_ASM_MMX
-SUBDIRS = mmxsse
-endif
 
-DIST_SUBDIRS = altivec mmxsse
+INCLUDES = -I$(top_srcdir)
 
-AM_CPPFLAGS = -I$(top_srcdir) -I$(top_srcdir)/utils
 
-lib_LTLIBRARIES = libmjpegutils.la
+noinst_LIBRARIES = libmotion.a
+lib_LIBRARIES = libmjpegutils.a
+
+libmotion_MMXSSE =  mblock_sumsq_mmx.s mblock_bsumsq_mmx.s mblock_bsad_mmx.s \
+                    mblock_sad_mmxe.s mblock_sad_mmx.s  \
+                    mblock_sub44_sads_x86.c attributes.h
+
+libmjpegutils_a_SOURCES = mjpeg_logging.c cpu_accel.c \
+                          mjpeg_logging.h mjpeg_types.h cpu_accel.h \
+                          yuv4mpeg.c yuv4mpeg_ratio.c \
+                          yuv4mpeg.h yuv4mpeg_intern.h \
+                          mpegconsts.c mpegconsts.h \
+                          mpegtimecode.c mpegtimecode.h
 
 if HAVE_ALTIVEC
-altivec_lib = $(top_builddir)/utils/altivec/libaltivec.la
+libmjpegutils_a_LIBADD = altivec/*.o
 endif
+
+pkginclude_HEADERS = yuv4mpeg.h mpegconsts.h mjpeg_logging.h mjpeg_types.h mpegtimecode.h
+
+if HAVE_ASM_NASM
 if HAVE_ASM_MMX
-mmxsse_lib = $(top_builddir)/utils/mmxsse/libmmxsse.la
+libmotion_SIMD = $(libmotion_MMXSSE)
+else
+mpeg2enc_SIMD = 
+endif
+else
+mpeg2enc_SIMD = 
 endif
 
-libmjpegutils_la_LIBADD = $(mmxsse_lib) $(altivec_lib)
+libmotion_a_SOURCES = motionsearch.c $(libmotion_SIMD) mmx.h motionsearch.h fastintfns.h
 
-libmjpegutils_la_LDFLAGS = \
-	$(LT_STATIC) \
-	-version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
-	-release $(LT_RELEASE) $(EXTRA_LDFLAGS)
-
-libmjpegutils_la_SOURCES = \
-	mjpeg_logging.c \
-	mpegconsts.c \
-	mpegtimecode.c \
-	yuv4mpeg.c \
-	yuv4mpeg_ratio.c \
-	motionsearch.c \
-	cpu_accel.c
-
-noinst_HEADERS = \
-	cpu_accel.h \
-	fastintfns.h \
-	mmx.h \
-	videodev_mjpeg.h \
-	yuv4mpeg_intern.h
-
-pkginclude_HEADERS = \
-	format_codes.h \
-	mjpeg_logging.h \
-	mjpeg_types.h \
-	mpegconsts.h \
-	mpegtimecode.h \
-	motionsearch.h \
-	yuv4mpeg.h
+EXTRA_DIST = videodev_mjpeg.h format_codes.h mblock_sub44_sads_x86_h.c .cvsignore mblock_sub44_sads_x86.h
 
 MAINTAINERCLEANFILES = Makefile.in
+
+%.o: %.s ; 	$(AS) $(ASFLAGS) -o $@ $<
+

@@ -17,14 +17,26 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
+/*
+ * This AltiVec detection code relies on the operating system to provide and
+ * illegal instruction signal if AltiVec is not present. It is known to work
+ * on Mac OS X and Linux.
+ */
 
 #ifdef HAVE_ALTIVEC_H
-/* include last to ensure AltiVec type semantics, especially for bool. */
 #include <altivec.h>
 #endif
+
+#include <stdio.h>
+#include <signal.h>
+#include <setjmp.h>
+
+static sigjmp_buf jmpbuf;
+
+static void sig_ill(int sig)
+{
+    siglongjmp(jmpbuf, 1);
+}
 
 /*
  * Functions containing AltiVec code have additional VRSAVE instructions
@@ -40,18 +52,42 @@
  * instruction.
  */
 #pragma altivec_vrsave off
-int altivec_copy_v0()
+static void copy_v0()
 {
-    register vector unsigned int v0 asm ("v0");
+    register vector unsigned char v0 asm ("v0");
     union {
-	vector unsigned int align16;
-	unsigned int v0[4];
+	vector unsigned char align16;
+	unsigned char v0[16];
     } copy;
 
     vec_st(v0, 0, copy.v0);
-    return copy.v0[0];
 }
 
-/*
- * detect_altivec() moved to ../cpu_accel.c
- */
+int detect_altivec()
+{
+    volatile int detected = 0; /* volatile (modified after sigsetjmp) */
+    struct sigaction act, oact;
+
+    act.sa_handler = sig_ill;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+
+    if (sigaction(SIGILL, &act, &oact)) {
+	perror("sigaction");
+	return 0;
+    }
+
+    if (sigsetjmp(jmpbuf, 1))
+	goto noAltiVec;
+
+    /* try to read an AltiVec register */ 
+    copy_v0();
+
+    detected = 1;
+
+noAltiVec:
+    if (sigaction(SIGILL, &oact, (struct sigaction *)0))
+	perror("sigaction");
+
+    return detected;
+}

@@ -17,8 +17,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
+#ifdef HAVE_ALTIVEC_H
+#include <altivec.h>
 #endif
 
 #include "altivec_motion.h"
@@ -28,10 +28,6 @@
 /* #define AMBER_ENABLE */
 #include "amber.h"
 
-#ifdef HAVE_ALTIVEC_H
-/* include last to ensure AltiVec type semantics, especially for bool. */
-#include <altivec.h>
-#endif
 
 /*
  * Input requirements:
@@ -191,6 +187,7 @@ static int sumsq_00(SUMSQ_PDECL) /* {{{ */
     return vo.s.sum;
 } /* }}} */
 
+
 /*
  * s = rowstride
  * for (j = 0; j < h; j++) {
@@ -221,6 +218,7 @@ static int sumsq_10(SUMSQ_PDECL) /* {{{ */
 	} s;
     } vo;
 
+
 #define ISAD() /* {{{ */                                                     \
     /* pB[i] + pB[i+1] */                                                    \
     bH = vec_add(b0H, b1H);                                                  \
@@ -235,7 +233,7 @@ static int sumsq_10(SUMSQ_PDECL) /* {{{ */
     bL = vec_sra(bL, one);                                                   \
                                                                              \
     /* d = abs( ((pB[i]+pB[i+1]+1)>>1) - pR[i] ) */                          \
-    bH = vu16(vec_packsu(bH, bL));                                            \
+    vu8(bH) = vec_packsu(bH, bL);                                            \
     min = vec_min(vu8(bH), lR);                                              \
     max = vec_max(vu8(bH), lR);                                              \
     dif = vec_sub(max, min);                                                 \
@@ -279,21 +277,23 @@ static int sumsq_10(SUMSQ_PDECL) /* {{{ */
 	l1 = vec_ld(16, pB);
 
 	/* (unsigned short[]) pB[0-7] */
-	b0H = vu16(vec_mergeh(zero, lB0));
+	vu8(b0H) = vec_mergeh(zero, lB0);
 
 	/* (unsigned short[]) pB[8-15] */
-	b0L = vu16(vec_mergel(zero, lB0));
+	vu8(b0L) = vec_mergel(zero, lB0);
 
 	/* (unsigned short[]) pB[1-8] */
-	b1H = vu16(vec_mergeh(zero, lB1));
+	vu8(b1H) = vec_mergeh(zero, lB1);
 
 	/* (unsigned short[]) pB[9-16] */
-	b1L = vu16(vec_mergel(zero, lB1));
+	vu8(b1L) = vec_mergel(zero, lB1);
+
 
 	ISAD();
 
 	pR += rowstride;
 	lR = vec_ld(0, pR);
+
 
 	lB0 = vec_perm(l2, l3, perm0);
 	lB1 = vec_perm(l2, l3, perm1);
@@ -303,16 +303,17 @@ static int sumsq_10(SUMSQ_PDECL) /* {{{ */
 	l3 = vec_ld(16, pB);
 
 	/* (unsigned short[]) pB[0-7] */
-	b0H = vu16(vec_mergeh(zero, lB0));
+	vu8(b0H) = vec_mergeh(zero, lB0);
 
 	/* (unsigned short[]) pB[8-15] */
-	b0L = vu16(vec_mergel(zero, lB0));
+	vu8(b0L) = vec_mergel(zero, lB0);
 
 	/* (unsigned short[]) pB[1-8] */
-	b1H = vu16(vec_mergeh(zero, lB1));
+	vu8(b1H) = vec_mergeh(zero, lB1);
 
 	/* (unsigned short[]) pB[9-16] */
-	b1L = vu16(vec_mergel(zero, lB1));
+	vu8(b1L) = vec_mergel(zero, lB1);
+
 
 	ISAD();
 
@@ -325,38 +326,40 @@ static int sumsq_10(SUMSQ_PDECL) /* {{{ */
     lB1 = vec_perm(l0, l1, perm1);
 
     /* (unsigned short[]) pB[0-7] */
-    b0H = vu16(vec_mergeh(zero, lB0));
+    vu8(b0H) = vec_mergeh(zero, lB0);
 
     /* (unsigned short[]) pB[8-15] */
-    b0L = vu16(vec_mergel(zero, lB0));
+    vu8(b0L) = vec_mergel(zero, lB0);
 
     /* (unsigned short[]) pB[1-8] */
-    b1H = vu16(vec_mergeh(zero, lB1));
+    vu8(b1H) = vec_mergeh(zero, lB1);
 
     /* (unsigned short[]) pB[9-16] */
-    b1L = vu16(vec_mergel(zero, lB1));
+    vu8(b1L) = vec_mergel(zero, lB1);
 
     ISAD();
 
     pR += rowstride;
     lR = vec_ld(0, pR);
 
+
     lB0 = vec_perm(l2, l3, perm0);
     lB1 = vec_perm(l2, l3, perm1);
 
     /* (unsigned short[]) pB[0-7] */
-    b0H = vu16(vec_mergeh(zero, lB0));
+    vu8(b0H) = vec_mergeh(zero, lB0);
 
     /* (unsigned short[]) pB[8-15] */
-    b0L = vu16(vec_mergel(zero, lB0));
+    vu8(b0L) = vec_mergel(zero, lB0);
 
     /* (unsigned short[]) pB[1-8] */
-    b1H = vu16(vec_mergeh(zero, lB1));
+    vu8(b1H) = vec_mergeh(zero, lB1);
 
     /* (unsigned short[]) pB[9-16] */
-    b1L = vu16(vec_mergel(zero, lB1));
+    vu8(b1L) = vec_mergel(zero, lB1);
 
     ISAD();
+
 
     vo.v = vec_sums(vs32(sum), vs32(zero));
 
@@ -411,7 +414,7 @@ static int sumsq_01(SUMSQ_PDECL) /* {{{ */
     bL = vec_sra(bL, one);                                                   \
                                                                              \
     /* d = abs( ((pB[i]+pB[i+s]+1)>>1) - pR[i] ) */                          \
-    bH = vu16(vec_packsu(bH, bL));                                            \
+    vu8(bH) = vec_packsu(bH, bL);                                            \
     min = vec_min(vu8(bH), lR);                                              \
     max = vec_max(vu8(bH), lR);                                              \
     dif = vec_sub(max, min);                                                 \
@@ -444,16 +447,16 @@ static int sumsq_01(SUMSQ_PDECL) /* {{{ */
 	lR = vec_ld(0, pR);
 
 	/* (unsigned short[]) pB[0-7] */
-	b0H = vu16(vec_mergeh(zero, lB0));
+	vu8(b0H) = vec_mergeh(zero, lB0);
 
 	/* (unsigned short[]) pB[8-15] */
-	b0L = vu16(vec_mergel(zero, lB0));
+	vu8(b0L) = vec_mergel(zero, lB0);
 
 	/* (unsigned short[]) pB+s[0-7] */
-	b1H = vu16(vec_mergeh(zero, lB1));
+	vu8(b1H) = vec_mergeh(zero, lB1);
 
 	/* (unsigned short[]) pB+s[8-15] */
-	b1L = vu16(vec_mergel(zero, lB1));
+	vu8(b1L) = vec_mergel(zero, lB1);
 
 	lB0 = vec_sld(l0, l0, 0);
 
@@ -468,10 +471,10 @@ static int sumsq_01(SUMSQ_PDECL) /* {{{ */
 	    lR = vec_ld(0, pR);
 
 	    /* (unsigned short[]) pB[0-7] */
-	    b0H = vu16(vec_mergeh(zero, lB0));
+	    vu8(b0H) = vec_mergeh(zero, lB0);
 
 	    /* (unsigned short[]) pB[8-15] */
-	    b0L = vu16(vec_mergel(zero, lB0));
+	    vu8(b0L) = vec_mergel(zero, lB0);
 
 	    pB += rowstride;
 	    lB0 = vec_ld(0, pB);
@@ -483,10 +486,10 @@ static int sumsq_01(SUMSQ_PDECL) /* {{{ */
 	    lR = vec_ld(0, pR);
 
 	    /* (unsigned short[]) pB[0-7] */
-	    b1H = vu16(vec_mergeh(zero, lB1));
+	    vu8(b1H) = vec_mergeh(zero, lB1);
 
 	    /* (unsigned short[]) pB[8-15] */
-	    b1L = vu16(vec_mergel(zero, lB1));
+	    vu8(b1L) = vec_mergel(zero, lB1);
 
 
 	} while (--i);
@@ -513,16 +516,16 @@ static int sumsq_01(SUMSQ_PDECL) /* {{{ */
 	lB1 = vec_perm(lB1, l1, perm);
 
 	/* (unsigned short[]) pB[0-7] */
-	b0H = vu16(vec_mergeh(zero, lB0));
+	vu8(b0H) = vec_mergeh(zero, lB0);
 
 	/* (unsigned short[]) pB[8-15] */
-	b0L = vu16(vec_mergel(zero, lB0));
+	vu8(b0L) = vec_mergel(zero, lB0);
 
 	/* (unsigned short[]) pB+s[0-7] */
-	b1H = vu16(vec_mergeh(zero, lB1));
+	vu8(b1H) = vec_mergeh(zero, lB1);
 
 	/* (unsigned short[]) pB+s[8-15] */
-	b1L = vu16(vec_mergel(zero, lB1));
+	vu8(b1L) = vec_mergel(zero, lB1);
 
 	pB += rowstride;
 	l0 = vec_ld(0, pB);
@@ -539,10 +542,10 @@ static int sumsq_01(SUMSQ_PDECL) /* {{{ */
 	    l1 = vec_ld(16, pB);
 
 	    /* (unsigned short[]) pB[0-7] */
-	    b0H = vu16(vec_mergeh(zero, lB0));
+	    vu8(b0H) = vec_mergeh(zero, lB0);
 
 	    /* (unsigned short[]) pB[8-15] */
-	    b0L = vu16(vec_mergel(zero, lB0));
+	    vu8(b0L) = vec_mergel(zero, lB0);
 
 	    /* start loading next lR */
 	    pR += rowstride;
@@ -557,10 +560,10 @@ static int sumsq_01(SUMSQ_PDECL) /* {{{ */
 	    l1 = vec_ld(16, pB);
 
 	    /* (unsigned short[]) pB[0-7] */
-	    b1H = vu16(vec_mergeh(zero, lB1));
+	    vu8(b1H) = vec_mergeh(zero, lB1);
 
 	    /* (unsigned short[]) pB[8-15] */
-	    b1L = vu16(vec_mergel(zero, lB1));
+	    vu8(b1L) = vec_mergel(zero, lB1);
 
 
 	    /* start loading next lR */
@@ -579,10 +582,10 @@ static int sumsq_01(SUMSQ_PDECL) /* {{{ */
 
 
     /* (unsigned short[]) pB[0-7] */
-    b0H = vu16(vec_mergeh(zero, lB0));
+    vu8(b0H) = vec_mergeh(zero, lB0);
 
     /* (unsigned short[]) pB[8-15] */
-    b0L = vu16(vec_mergel(zero, lB0));
+    vu8(b0L) = vec_mergel(zero, lB0);
 
     ISAD();
 
@@ -628,11 +631,11 @@ static int sumsq_11(SUMSQ_PDECL) /* {{{ */
     pR = blk2;
 
     /* start loading first blocks */
-    l0 = vec_ld(0, pB);
-    l1 = vec_ld(16, pB);
-    pB += rowstride;
-    l2 = vec_ld(0, pB);
-    l3 = vec_ld(16, pB);
+    l0 = vec_ld(0, pB);                 
+    l1 = vec_ld(16, pB);               
+    pB += rowstride;                    
+    l2 = vec_ld(0, pB);                 
+    l3 = vec_ld(16, pB);               
 
     /* initialize constants */
     zero = vec_splat_u8(0);
@@ -646,45 +649,46 @@ static int sumsq_11(SUMSQ_PDECL) /* {{{ */
     perm1 = vec_add(perm, perm1);
 
     /* permute 1st set of loaded blocks  */
-    lB0 = vec_perm(l0, l1, perm);
-    lB1 = vec_perm(l0, l1, perm1);
+    lB0 = vec_perm(l0, l1, perm);      
+    lB1 = vec_perm(l0, l1, perm1);     
 
     /* start loading 3rd set */
-    pB += rowstride;
-    l0 = vec_ld(0, pB);
-    l1 = vec_ld(16, pB);
+    pB += rowstride;               
+    l0 = vec_ld(0, pB);            
+    l1 = vec_ld(16, pB);          
 
     /* permute 2nd set of loaded blocks  */
-    lB2 = vec_perm(l2, l3, perm);
-    lB3 = vec_perm(l2, l3, perm1);
+    lB2 = vec_perm(l2, l3, perm);      
+    lB3 = vec_perm(l2, l3, perm1);     
 
     /* start loading lR */
-    lR = vec_ld(0, pR);
+    lR = vec_ld(0, pR);                 
 
-    /* (unsigned short[]) pB[0-7] */
-    b0H = vu16(vec_mergeh(zero, lB0));
+    /* (unsigned short[]) pB[0-7] */    
+    vu8(b0H) = vec_mergeh(zero, lB0);   
+                                        
+    /* (unsigned short[]) pB[8-15] */   
+    vu8(b0L) = vec_mergel(zero, lB0);   
+                                        
+    /* (unsigned short[]) pB[1-8] */    
+    vu8(b1H) = vec_mergeh(zero, lB1);   
+                                        
+    /* (unsigned short[]) pB[9-16] */   
+    vu8(b1L) = vec_mergel(zero, lB1);   
 
-    /* (unsigned short[]) pB[8-15] */
-    b0L = vu16(vec_mergel(zero, lB0));
 
-    /* (unsigned short[]) pB[1-8] */
-    b1H = vu16(vec_mergeh(zero, lB1));
-
-    /* (unsigned short[]) pB[9-16] */
-    b1L = vu16(vec_mergel(zero, lB1));
-
-    /* (unsigned short[]) pB+s[0-7] */
-    b2H = vu16(vec_mergeh(zero, lB2));
+    /* (unsigned short[]) pB+s[0-7] */  
+    vu8(b2H) = vec_mergeh(zero, lB2);   
 			
-    /* (unsigned short[]) pB+s[8-15] */
-    b2L = vu16(vec_mergel(zero, lB2));
+    /* (unsigned short[]) pB+s[8-15] */ 
+    vu8(b2L) = vec_mergel(zero, lB2);   
 			
-    /* (unsigned short[]) pB+s[1-8] */
-    b3H = vu16(vec_mergeh(zero, lB3));
+    /* (unsigned short[]) pB+s[1-8] */  
+    vu8(b3H) = vec_mergeh(zero, lB3);   
 			
-    /* (unsigned short[]) pB+s[9-16] */
-    b3L = vu16(vec_mergel(zero, lB3));
-
+    /* (unsigned short[]) pB+s[9-16] */ 
+    vu8(b3L) = vec_mergel(zero, lB3);   
+                                        
 #define ISUMSQ(b0H,b0L,b1H,b1L,b2H,b2L,b3H,b3L) /* {{{ */                    \
     /* pB[i] + pB[i+1] */                                                    \
     bH = vec_add(b0H, b1H);                                                  \
@@ -708,7 +712,7 @@ static int sumsq_11(SUMSQ_PDECL) /* {{{ */
                                                                              \
     /* absolute value is used increase parallelism, x16 instead of x8 */     \
     /* d = abs( ((int)(pB[i]+pB[i+1]+pB[i+s]+pB[i+s+1]+2)>>2) - pR[i] ) */   \
-    bH = vu16(vec_packsu(bH, bL));                                            \
+    vu8(bH) = vec_packsu(bH, bL);                                            \
     min = vec_min(vu8(bH), lR);                                              \
     max = vec_max(vu8(bH), lR);                                              \
     dif = vec_sub(max, min);                                                 \
@@ -720,86 +724,87 @@ static int sumsq_11(SUMSQ_PDECL) /* {{{ */
 
     i = (h >> 1) - 1;
     do {
-	ISUMSQ(b0H,b0L,b1H,b1L,b2H,b2L,b3H,b3L);
+	ISUMSQ(b0H,b0L,b1H,b1L,b2H,b2L,b3H,b3L);     
 				
 
 	/* start loading next lR */
-	pR += rowstride;
-	lR = vec_ld(0, pR);
+	pR += rowstride;                           
+	lR = vec_ld(0, pR);                        
 				
 	/* perm loaded set */
-	lB0 = vec_perm(l0, l1, perm);
-	lB1 = vec_perm(l0, l1, perm1);
+	lB0 = vec_perm(l0, l1, perm);              
+	lB1 = vec_perm(l0, l1, perm1);             
 
 	/* start loading next set */
-	pB += rowstride;
-	l0 = vec_ld(0, pB);
-	l1 = vec_ld(16, pB);
+	pB += rowstride;               
+	l0 = vec_ld(0, pB);            
+	l1 = vec_ld(16, pB);          
 				
 
-	/* (unsigned short[]) pB[0-7] */
-	b0H = vu16(vec_mergeh(zero, lB0));
+	/* (unsigned short[]) pB[0-7] */           
+	vu8(b0H) = vec_mergeh(zero, lB0);          
+				
+	/* (unsigned short[]) pB[8-15] */          
+	vu8(b0L) = vec_mergel(zero, lB0);          
+				
+	/* (unsigned short[]) pB[1-8] */           
+	vu8(b1H) = vec_mergeh(zero, lB1);          
+				
+	/* (unsigned short[]) pB[9-16] */          
+	vu8(b1L) = vec_mergel(zero, lB1);          
 
-	/* (unsigned short[]) pB[8-15] */
-	b0L = vu16(vec_mergel(zero, lB0));
 
-	/* (unsigned short[]) pB[1-8] */
-	b1H = vu16(vec_mergeh(zero, lB1));
-
-	/* (unsigned short[]) pB[9-16] */
-	b1L = vu16(vec_mergel(zero, lB1));
-
-	ISUMSQ(b2H,b2L,b3H,b3L,b0H,b0L,b1H,b1L);
+	ISUMSQ(b2H,b2L,b3H,b3L,b0H,b0L,b1H,b1L);     
 
 
 	/* start loading next lR */
-	pR += rowstride;
-	lR = vec_ld(0, pR);
+	pR += rowstride;                           
+	lR = vec_ld(0, pR);                        
 				
 	/* perm loaded set */
-	lB2 = vec_perm(l0, l1, perm);
-	lB3 = vec_perm(l0, l1, perm1);
+	lB2 = vec_perm(l0, l1, perm);              
+	lB3 = vec_perm(l0, l1, perm1);             
 
 	/* start loading next set */
-	pB += rowstride;
-	l0 = vec_ld(0, pB);
-	l1 = vec_ld(16, pB);
+	pB += rowstride;               
+	l0 = vec_ld(0, pB);            
+	l1 = vec_ld(16, pB);          
 
 					
-	/* (unsigned short[]) pB+s[0-7] */
-	b2H = vu16(vec_mergeh(zero, lB2));
-
-	/* (unsigned short[]) pB+s[8-15] */
-	b2L = vu16(vec_mergel(zero, lB2));
-
-	/* (unsigned short[]) pB+s[1-8] */
-	b3H = vu16(vec_mergeh(zero, lB3));
-
-	/* (unsigned short[]) pB+s[9-16] */
-	b3L = vu16(vec_mergel(zero, lB3));
+	/* (unsigned short[]) pB+s[0-7] */               
+	vu8(b2H) = vec_mergeh(zero, lB2);                
+					
+	/* (unsigned short[]) pB+s[8-15] */              
+	vu8(b2L) = vec_mergel(zero, lB2);                
+					
+	/* (unsigned short[]) pB+s[1-8] */               
+	vu8(b3H) = vec_mergeh(zero, lB3);                
+					
+	/* (unsigned short[]) pB+s[9-16] */              
+	vu8(b3L) = vec_mergel(zero, lB3);                
     } while (--i);
 
-    ISUMSQ(b0H,b0L,b1H,b1L,b2H,b2L,b3H,b3L);
-
-    pR += rowstride;
-    lR = vec_ld(0, pR);
+    ISUMSQ(b0H,b0L,b1H,b1L,b2H,b2L,b3H,b3L);     
 			
-    lB0 = vec_perm(l0, l1, perm);
-    lB1 = vec_perm(l0, l1, perm1);
+    pR += rowstride;                           
+    lR = vec_ld(0, pR);                        
 			
-    /* (unsigned short[]) pB[0-7] */
-    b0H = vu16(vec_mergeh(zero, lB0));
-
-    /* (unsigned short[]) pB[8-15] */
-    b0L = vu16(vec_mergel(zero, lB0));
-
-    /* (unsigned short[]) pB[1-8] */
-    b1H = vu16(vec_mergeh(zero, lB1));
-
-    /* (unsigned short[]) pB[9-16] */
-    b1L = vu16(vec_mergel(zero, lB1));
-
-    ISUMSQ(b2H,b2L,b3H,b3L,b0H,b0L,b1H,b1L);
+    lB0 = vec_perm(l0, l1, perm);              
+    lB1 = vec_perm(l0, l1, perm1);             
+			
+    /* (unsigned short[]) pB[0-7] */           
+    vu8(b0H) = vec_mergeh(zero, lB0);          
+			
+    /* (unsigned short[]) pB[8-15] */          
+    vu8(b0L) = vec_mergel(zero, lB0);          
+			
+    /* (unsigned short[]) pB[1-8] */           
+    vu8(b1H) = vec_mergeh(zero, lB1);          
+			
+    /* (unsigned short[]) pB[9-16] */          
+    vu8(b1L) = vec_mergel(zero, lB1);          
+			
+    ISUMSQ(b2H,b2L,b3H,b3L,b0H,b0L,b1H,b1L);     
 
     vo.v = vec_sums(vs32(sum), vs32(zero));
 
@@ -807,6 +812,8 @@ static int sumsq_11(SUMSQ_PDECL) /* {{{ */
 
 #undef ISUMSQ
 } /* }}} */
+
+
 
 int sumsq_altivec(SUMSQ_PDECL)
 {
@@ -818,10 +825,10 @@ int sumsq_altivec(SUMSQ_PDECL)
 
     if (NOT_VECTOR_ALIGNED(rowstride))
 	mjpeg_error_exit1("sumsq: rowstride %% 16 != 0, (%d)", rowstride);
-#endif
 
     if (h != 8 && h != 16)
 	mjpeg_error_exit1("sumsq: h != [8|16], (%d)", h);
+#endif
 
     AMBER_START;
 
@@ -841,6 +848,7 @@ int sumsq_altivec(SUMSQ_PDECL)
 
     return sumsq;
 }
+
 
 #if ALTIVEC_TEST_FUNCTION(sumsq)
 ALTIVEC_TEST(sumsq, int, (SUMSQ_PDECL),
