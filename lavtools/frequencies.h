@@ -89,12 +89,12 @@
 /* --------------------------------------------------------------------- */
 
 struct CHANLIST {
-    const char *name;
+    char *name;
     int   freq;
 };
 
 struct CHANLISTS {
-    const char       *name;
+    char             *name;
     struct CHANLIST  *list;
     int               count;
 };
@@ -104,6 +104,8 @@ struct CHANLISTS {
 /* --------------------------------------------------------------------- */
 
 extern struct CHANLISTS   chanlists[];
+extern struct STRTAB chanlist_names[];
+
 extern int                chantab;
 extern struct CHANLIST   *chanlist;
 extern int                chancount;
