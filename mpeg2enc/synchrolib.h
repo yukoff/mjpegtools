@@ -31,6 +31,7 @@
 #define SYNCHROLIB_H
 #include <pthread.h>
 
+
 /* Synchronisation condition */
 
 typedef struct _sync_guard {
@@ -43,16 +44,16 @@ typedef struct _semaphore {
 	pthread_mutex_t mutex;
 	pthread_cond_t raised;
 	volatile int count;
-} mp_semaphore_t;
+} semaphore_t;
 
 
 
 #define SEMAPHORE_INITIALIZER { PTHREAD_MUTEX_INITIALIZER, \
                                 PTHREAD_COND_INITIALIZER, \
-                                0 }
+                                0 };
 #define GUARD_INITIALIZER    { PTHREAD_MUTEX_INITIALIZER, \
                                 PTHREAD_COND_INITIALIZER, \
-                                0 }
+                                0 }; 
 void sync_guard_init( sync_guard_t *guard, int init );
 
 void sync_guard_test( sync_guard_t *guard);
@@ -60,13 +61,11 @@ void sync_guard_test( sync_guard_t *guard);
 void sync_guard_update( sync_guard_t *guard, int predicate );
 
 
-void mp_semaphore_init( mp_semaphore_t *sema, int init_count );
+void mp_semaphore_init( semaphore_t *sema, int init_count );
 
-void mp_semaphore_wait( mp_semaphore_t *sema);
+void mp_semaphore_wait( semaphore_t *sema);
 
-void mp_semaphore_signal( mp_semaphore_t *sema, int count );
-
-void mp_semaphore_set( mp_semaphore_t *sema );
+void mp_semaphore_signal( semaphore_t *sema, int count );
 
 
 #endif

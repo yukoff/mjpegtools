@@ -1,95 +1,102 @@
-/*
- * Copyright (c) 1991 MPEG/audio software simulation group, All Rights Reserved
- *
- * common.c
- *
- * MPEG/audio coding/decoding software, work in progress
- *   NOT for public distribution until verified and approved by the
- *   MPEG/audio committee.  For further information, please contact
- *   Davis Pan, 508-493-2241, e-mail: pan@3d.enet.dec.com
- *
- * VERSION 4.0
- *   changes made since last update:
- *   date   programmers         comment
- * 2/25/91  Doulas Wong,        start of version 1.0 records
- *          Davis Pa
- * 5/10/91  W. Joseph Carter    Created this file for all common
- *                              functions and global variables.
- *                              Ported to Macintosh and Unix.
- *                              Added Jean-Georges Fritsch's
- *                              "bitstream.c" package.
- *                              Added routines to handle AIFF PCM
- *                              sound files.
- *                              Added "mem_alloc()" and "mem_free()"
- *                              routines for memory allocation
- *                              portability.
- *                              Added routines to convert between
- *                              Apple SANE extended floating point
- *                              format and IEEE double precision
- *                              floating point format.  For AIFF.
- * 02jul91 dpwe (Aware Inc)     Moved allocation table input here;
- *                              Tables read from subdir TABLES_PATH.
- *                              Added some debug printout fns (Write*)
- * 7/10/91 Earle Jennings       replacement of the one float by FLOAT
- *                              port to MsDos from MacIntosh version
- * 8/ 5/91 Jean-Georges Fritsch fixed bug in open_bit_stream_r()
- *10/ 1/91 S.I. Sudharsanan,    Ported to IBM AIX platform.
- *         Don H. Lee,
- *         Peter W. Farrett
- *10/3/91  Don H. Lee           implemented CRC-16 error protection
- *                              newly introduced functions are
- *                              I_CRC_calc, II_CRC_calc and
- *                              update_CRC. Additions and revisions
- *                              are marked with dhl for clarity
- *10/18/91 Jean-Georges Fritsch fixed bug in update_CRC(),
- *                              II_CRC_calc() and I_CRC_calc()
- * 2/11/92  W. Joseph Carter    Ported new code to Macintosh.  Most
- *                              important fixes involved changing
- *                              16-bit ints to long or unsigned in
- *                              bit alloc routines for quant of 65535
- *                              and passing proper function args.
- *                              Removed "Other Joint Stereo" option
- *                              and made bitrate be total channel
- *                              bitrate, irrespective of the mode.
- *                              Fixed many small bugs & reorganized.
- * 3/20/92 Jean-Georges Fritsch  fixed bug in start-of-frame search
- * 6/15/92 Juan Pineda          added refill_buffer(bs) "n"
- *                              initialization
- * 7/08/92 Susanne Ritscher     MS-DOS, MSC6.0 port fixes
- * 7/27/92 Mike Li               (re-)Port to MS-DOS
- * 8/19/92 Soren H. Nielsen     Fixed bug in I_CRC_calc and in
- *                              II_CRC_calc.  Added function: new_ext
- *                              for better MS-DOS compatability
- * 3/10/93 Kevin Peterson       changed aiff_read_headers to handle
- *                              chunks in any order.  now returns
- *                              position of sound data in file.
- * 3/31/93 Jens Spille          changed IFF_* string compares to use
- *                              strcmp()
- * 5/30/93 Masahiro Iwadare	?? the previous modification does not
- *				  work. recovered to the original. ??
- * 8/27/93 Seymour Shlien,      Fixes in Unix and MSDOS ports,
- *         Daniel Lauzon,
- *         Bill Truerniet
- * 2004/7/29 Steven Schultz     Cleanup & modernize.  Remove unused
- *                              (unreferenced) code.
- * 2005/10/4 Steven Schultz     Continuing cleanup.
-*/
+/**********************************************************************
+Copyright (c) 1991 MPEG/audio software simulation group, All Rights Reserved
+common.c
+**********************************************************************/
+/**********************************************************************
+ * MPEG/audio coding/decoding software, work in progress              *
+ *   NOT for public distribution until verified and approved by the   *
+ *   MPEG/audio committee.  For further information, please contact   *
+ *   Davis Pan, 508-493-2241, e-mail: pan@3d.enet.dec.com             *
+ *                                                                    *
+ * VERSION 4.0                                                        *
+ *   changes made since last update:                                  *
+ *   date   programmers         comment                               *
+ * 2/25/91  Doulas Wong,        start of version 1.0 records          *
+ *          Davis Pan                                                 *
+ * 5/10/91  W. Joseph Carter    Created this file for all common      *
+ *                              functions and global variables.       *
+ *                              Ported to Macintosh and Unix.         *
+ *                              Added Jean-Georges Fritsch's          *
+ *                              "bitstream.c" package.                *
+ *                              Added routines to handle AIFF PCM     *
+ *                              sound files.                          *
+ *                              Added "mem_alloc()" and "mem_free()"  *
+ *                              routines for memory allocation        *
+ *                              portability.                          *
+ *                              Added routines to convert between     *
+ *                              Apple SANE extended floating point    *
+ *                              format and IEEE double precision      *
+ *                              floating point format.  For AIFF.     *
+ * 02jul91 dpwe (Aware Inc)     Moved allocation table input here;    *
+ *                              Tables read from subdir TABLES_PATH.  *
+ *                              Added some debug printout fns (Write*)*
+ * 7/10/91 Earle Jennings       replacement of the one float by FLOAT *
+ *                              port to MsDos from MacIntosh version  *
+ * 8/ 5/91 Jean-Georges Fritsch fixed bug in open_bit_stream_r()      *
+ *10/ 1/91 S.I. Sudharsanan,    Ported to IBM AIX platform.           *
+ *         Don H. Lee,                                                *
+ *         Peter W. Farrett                                           *
+ *10/3/91  Don H. Lee           implemented CRC-16 error protection   *
+ *                              newly introduced functions are        *
+ *                              I_CRC_calc, II_CRC_calc and           *
+ *                              update_CRC. Additions and revisions   *
+ *                              are marked with dhl for clarity       *
+ *10/18/91 Jean-Georges Fritsch fixed bug in update_CRC(),            *
+ *                              II_CRC_calc() and I_CRC_calc()        *
+ * 2/11/92  W. Joseph Carter    Ported new code to Macintosh.  Most   *
+ *                              important fixes involved changing     *
+ *                              16-bit ints to long or unsigned in    *
+ *                              bit alloc routines for quant of 65535 *
+ *                              and passing proper function args.     *
+ *                              Removed "Other Joint Stereo" option   *
+ *                              and made bitrate be total channel     *
+ *                              bitrate, irrespective of the mode.    *
+ *                              Fixed many small bugs & reorganized.  *
+ * 3/20/92 Jean-Georges Fritsch  fixed bug in start-of-frame search   *
+ * 6/15/92 Juan Pineda          added refill_buffer(bs) "n"           *
+ *                              initialization                        *
+ * 7/08/92 Susanne Ritscher     MS-DOS, MSC6.0 port fixes             *
+ * 7/27/92 Mike Li               (re-)Port to MS-DOS                  *
+ * 8/19/92 Soren H. Nielsen     Fixed bug in I_CRC_calc and in        *
+ *                              II_CRC_calc.  Added function: new_ext *
+ *                              for better MS-DOS compatability       *
+ * 3/10/93 Kevin Peterson       changed aiff_read_headers to handle   *
+ *                              chunks in any order.  now returns     *
+ *                              position of sound data in file.       *
+ * 3/31/93 Jens Spille          changed IFF_* string compares to use  *
+ *                              strcmp()                              *
+ * 5/30/93 Masahiro Iwadare	?? the previous modification does not *
+ *				  work. recovered to the original. ?? *
+ * 8/27/93 Seymour Shlien,      Fixes in Unix and MSDOS ports,        *
+ *         Daniel Lauzon, and                                         *
+ *         Bill Truerniet                                             *
+ **********************************************************************/
 
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
+/***********************************************************************
+*
+*  Global Include Files
+*
+***********************************************************************/
 #include        <stdlib.h>
-#include        <string.h>
-#include	<ctype.h>
 #include        "common.h"
 
-/*
- *  Global Variable Definitions
-*/
+#ifdef  MACINTOSH
 
-const char *mode_names[4] = { "stereo", "j-stereo", "dual-ch", "single-ch" };
-const char *layer_names[3] = { "I", "II", "III" };
+#include        <SANE.h>
+#include        <pascal.h>
+
+#endif
+
+#include <ctype.h>
+
+/***********************************************************************
+*
+*  Global Variable Definitions
+*
+***********************************************************************/
+
+char *mode_names[4] = { "stereo", "j-stereo", "dual-ch", "single-ch" };
+char *layer_names[3] = { "I", "II", "III" };
 
 double  s_freq[4] = {44.1, 48, 32, 0};
 
@@ -99,7 +106,7 @@ int     bitrate[3][15] = {
           {0,32,40,48,56,64,80,96,112,128,160,192,224,256,320}
         };
 
-double multiple[64] = {
+double FAR multiple[64] = {
 2.00000000000000, 1.58740105196820, 1.25992104989487,
 1.00000000000000, 0.79370052598410, 0.62996052494744, 0.50000000000000,
 0.39685026299205, 0.31498026247372, 0.25000000000000, 0.19842513149602,
@@ -119,10 +126,12 @@ double multiple[64] = {
 1E-20
 };
 
-/*
+/***********************************************************************
+ *
  * Using the decoded info the appropriate possible quantization per
  * subband table is loaded
-*/
+ *
+ **********************************************************************/
 
 int pick_table(fr_ps)   /* choose table, load if necess, return # sb's */
 frame_params *fr_ps;
@@ -144,7 +153,7 @@ frame_params *fr_ps;
         if (fr_ps->tab_num != table) {
            if (fr_ps->tab_num >= 0)
               mem_free((void **)&(fr_ps->alloc));
-           fr_ps->alloc = (al_table *) mem_alloc(sizeof(al_table),
+           fr_ps->alloc = (al_table FAR *) mem_alloc(sizeof(al_table),
                                                          "alloc");
            sblim = read_bit_alloc(fr_ps->tab_num = table, fr_ps->alloc);
         }
@@ -158,7 +167,7 @@ static int jsb_table[3][4] =  { { 4, 8, 12, 16 }, { 4, 8, 12, 16},
                                 { 0, 4, 8, 16} };  /* lay+m_e -> jsbound */
 
     if(lay<1 || lay >3 || m_ext<0 || m_ext>3) {
-		mjpeg_error_exit1("js_bound bad layer/modext (%d/%d)", lay, m_ext);
+		mjpeg_error_exit1("js_bound bad layer/modext (%d/%d)\n", lay, m_ext);
     }
     return(jsb_table[lay-1][m_ext]);
 }
@@ -261,7 +270,7 @@ int i,j,k;
 
 void WriteSamples(ch, sample, bit_alloc, fr_ps, s)
 int ch;
-unsigned int sample[SBLIMIT];
+unsigned int FAR sample[SBLIMIT];
 unsigned int bit_alloc[SBLIMIT];
 frame_params *fr_ps;
 FILE *s;
@@ -331,50 +340,478 @@ long sRate;             /* legal rates 32000, 44100, 48000 */
 
 #endif
 
-/*
- *  Allocate number of bytes of memory equal to "block".
-*/
+/*******************************************************************************
+*
+*  Allocate number of bytes of memory equal to "block".
+*
+*******************************************************************************/
 
-void  *mem_alloc(block, item)
+void  FAR *mem_alloc(block, item)
 unsigned long   block;
-const char      *item;
+char            *item;
 {
+
     void    *ptr;
 
-    ptr = (void *) calloc(1, block);
+#ifdef  MACINTOSH
+    ptr = NewPtr(block);
+#endif
 
-    if (ptr == NULL)
-        mjpeg_error_exit1("Unable to allocate %s\n", item);
+#ifdef MSC60
+    /*ptr = (void FAR *) _fmalloc((unsigned int)block);*/ /* far memory, 92-07-08 sr */
+    ptr = (void FAR *) malloc((unsigned int)block); /* far memory, 93-08-24 ss */
+#endif
+
+#if ! defined (MACINTOSH) && ! defined (MSC60)
+    ptr = (void FAR *) malloc(block);
+#endif
+
+    if (ptr != NULL){
+#ifdef  MSC60
+        _fmemset(ptr, 0, (unsigned int)block); /* far memory, 92-07-08 sr */
+#else
+        memset(ptr, 0, block);
+#endif
+    }
+    else{
+        printf("Unable to allocate %s\n", item);
+        exit(0);
+    }
     return(ptr);
 }
 
-/*
- *  Free memory pointed to by "*ptr_addr".
-*/
+
+/****************************************************************************
+*
+*  Free memory pointed to by "*ptr_addr".
+*
+*****************************************************************************/
 
 void    mem_free(ptr_addr)
 void    **ptr_addr;
 {
 
     if (*ptr_addr != NULL){
+#ifdef  MACINTOSH
+        DisposPtr(*ptr_addr);
+#else
         free(*ptr_addr);
+#endif
         *ptr_addr = NULL;
     }
+
 }
 
+/*******************************************************************************
+*
+*  Check block of memory all equal to a single byte, else return FALSE
+*
+*******************************************************************************/
+
+int memcheck(array, test, num)
+char *array;
+int test;       /* but only tested as a char (bottom 8 bits) */
+int num;
+{
+ int i=0;
+
+   while (array[i] == test && i<num) i++;
+   if (i==num) return TRUE;
+   else return FALSE;
+}
+
+/****************************************************************************
+*
+*  Routines to convert between the Apple SANE extended floating point format
+*  and the IEEE double precision floating point format.  These routines are
+*  called from within the Audio Interchange File Format (AIFF) routines.
+*
+*****************************************************************************/
+
 /*
- *  bit_stream.c package
- *  Author:  Jean-Georges Fritsch, C-Cube Microsystems
+*** Apple's 80-bit SANE extended has the following format:
+
+ 1       15      1            63
++-+-------------+-+-----------------------------+
+|s|       e     |i|            f                |
++-+-------------+-+-----------------------------+
+  msb        lsb   msb                       lsb
+
+The value v of the number is determined by these fields as follows:
+If 0 <= e < 32767,              then v = (-1)^s * 2^(e-16383) * (i.f).
+If e == 32767 and f == 0,       then v = (-1)^s * (infinity), regardless of i.
+If e == 32767 and f != 0,       then v is a NaN, regardless of i.
+
+*** IEEE Draft Standard 754 Double Precision has the following format:
+
+MSB
++-+---------+-----------------------------+
+|1| 11 Bits |           52 Bits           |
++-+---------+-----------------------------+
+ ^     ^                ^
+ |     |                |
+ Sign  Exponent         Mantissa
 */
 
-/*/
+/*****************************************************************************
+*
+*  double_to_extended()
+*
+*  Purpose:     Convert from IEEE double precision format to SANE extended
+*               format.
+*
+*  Passed:      Pointer to the double precision number and a pointer to what
+*               will hold the Apple SANE extended format value.
+*
+*  Outputs:     The SANE extended format pointer will be filled with the
+*               converted value.
+*
+*  Returned:    Nothing.
+*
+*****************************************************************************/
+
+void    double_to_extended(pd, ps)
+double  *pd;
+char    ps[10];
+{
+
+#ifdef  MACINTOSH
+
+        x96tox80(pd, (extended *) ps);
+
+#else
+
+register unsigned long  top2bits;
+
+register unsigned short *ps2;
+register IEEE_DBL       *p_dbl;
+register SANE_EXT       *p_ext;
+ 
+   p_dbl = (IEEE_DBL *) pd;
+   p_ext = (SANE_EXT *) ps;
+   top2bits = p_dbl->hi & 0xc0000000;
+   p_ext->l1 = ((p_dbl->hi >> 4) & 0x3ff0000) | top2bits;
+   p_ext->l1 |= ((p_dbl->hi >> 5) & 0x7fff) | 0x8000;
+   p_ext->l2 = (p_dbl->hi << 27) & 0xf8000000;
+   p_ext->l2 |= ((p_dbl->lo >> 5) & 0x07ffffff);
+   ps2 = (unsigned short *) & (p_dbl->lo);
+   ps2++;
+   p_ext->s1 = (*ps2 << 11) & 0xf800;
+
+#endif
+
+}
+
+/*****************************************************************************
+*
+*  extended_to_double()
+*
+*  Purpose:     Convert from SANE extended format to IEEE double precision
+*               format.
+*
+*  Passed:      Pointer to the Apple SANE extended format value and a pointer
+*               to what will hold the the IEEE double precision number.
+*
+*  Outputs:     The IEEE double precision format pointer will be filled with
+*               the converted value.
+*
+*  Returned:    Nothing.
+*
+*****************************************************************************/
+
+void    extended_to_double(ps, pd)
+char    ps[10];
+double  *pd;
+{
+
+#ifdef  MACINTOSH
+
+   x80tox96((extended *) ps, pd);
+
+#else
+
+register unsigned long  top2bits;
+
+register IEEE_DBL       *p_dbl;
+register SANE_EXT       *p_ext;
+
+   p_dbl = (IEEE_DBL *) pd;
+   p_ext = (SANE_EXT *) ps;
+   top2bits = p_ext->l1 & 0xc0000000;
+   p_dbl->hi = ((p_ext->l1 << 4) & 0x3ff00000) | top2bits;
+   p_dbl->hi |= (p_ext->l1 << 5) & 0xffff0;
+   p_dbl->hi |= (p_ext->l2 >> 27) & 0x1f;
+   p_dbl->lo = (p_ext->l2 << 5) & 0xffffffe0;
+   p_dbl->lo |= (unsigned long) ((p_ext->s1 >> 11) & 0x1f);
+
+#endif
+
+}
+
+
+/****  for debugging 
+showchar(str)
+char str[4];
+{
+int i;
+for (i=0;i<4;i++) printf("%c",str[i]);
+printf("\n");
+}
+****/
+
+/*****************************************************************************
+*
+*  Read Audio Interchange File Format (AIFF) headers.
+*
+*****************************************************************************/
+
+int             aiff_read_headers(file_ptr, aiff_ptr)
+FILE            *file_ptr;
+IFF_AIFF        *aiff_ptr;
+{
+
+register int   i;
+register long   seek_offset;
+register long   sound_position = 0L;
+
+char            temp_sampleRate[10];
+
+ChunkHeader     Header;
+Chunk           FormChunk;
+CommonChunk     CommChunk;
+SoundDataChunk  SndDChunk;
+
+   if (fseek(file_ptr, 0, SEEK_SET) != 0)
+      return(-1);
+
+   if (fread(&FormChunk, sizeof(Chunk), 1, file_ptr) != 1)
+      return(-1);
+
+#ifdef IFF_LONG 
+   if (*(unsigned long *) FormChunk.ckID != IFF_ID_FORM ||
+       *(unsigned long *) FormChunk.formType != IFF_ID_AIFF)
+      return(-1);
+#else
+
+   if (strncmp(FormChunk.ckID,IFF_ID_FORM,4) ||
+       strncmp(FormChunk.formType,IFF_ID_AIFF,4))
+      return(-1);
+#endif
+
+   /*
+    * chunks need not be in any particular order
+    */
+
+   while (fread(&Header, sizeof(ChunkHeader), 1, file_ptr) == 1) {
+
+#ifdef IFF_LONG  
+      if (*(unsigned long *)Header.ckID == IFF_ID_COMM) {
+
+#else
+      if (strncmp(Header.ckID,IFF_ID_COMM,4) == 0) {
+#endif
+
+	 /*
+	  * read comm chunk
+	  */
+         if (fread(&CommChunk.numChannels, sizeof(short), 1, file_ptr) != 1)
+            return(-1);
+
+         if (fread(&CommChunk.numSampleFrames, sizeof(unsigned long), 1,
+                   file_ptr) != 1)
+            return(-1);
+
+         if (fread(&CommChunk.sampleSize, sizeof(short), 1, file_ptr) != 1)
+            return(-1);
+
+         if (fread(CommChunk.sampleRate, sizeof(char[10]), 1, file_ptr) != 1)
+            return(-1);
+
+         for (i = 0; i < sizeof(char[10]); i++)
+            temp_sampleRate[i] = CommChunk.sampleRate[i];
+
+         extended_to_double(temp_sampleRate, &aiff_ptr->sampleRate);
+
+	 aiff_ptr->numChannels = CommChunk.numChannels;
+	 aiff_ptr->numSampleFrames = CommChunk.numSampleFrames;
+	 aiff_ptr->sampleSize = CommChunk.sampleSize;
+
+#ifdef IFF_LONG 
+      } else if (*(unsigned long *)Header.ckID == IFF_ID_SSND) { 
+#else
+      } else if (strncmp(Header.ckID,IFF_ID_SSND,4) == 0) {
+#endif
+	 /*
+	  * read ssnd chunk
+	  */
+	 if (fread(&SndDChunk.offset, sizeof(long), 1, file_ptr) != 1)
+	    return(-1);
+
+	 if (fread(&SndDChunk.blockSize, sizeof(long), 1, file_ptr) != 1)
+	    return(-1);
+
+	 aiff_ptr->blkAlgn.offset = SndDChunk.offset;
+	 aiff_ptr->blkAlgn.blockSize = SndDChunk.blockSize;
+	 aiff_ptr->sampleType = *(unsigned long *)Header.ckID;
+	 
+	 /*
+	  * record position of sound data
+	  */
+
+	 sound_position = ftell(file_ptr);
+
+	 /*
+	  * skip over sound data to look at remaining chunks
+	  */
+
+         seek_offset = Header.ckSize - sizeof(SoundDataChunk) +
+            sizeof(ChunkHeader);
+
+         if (fseek(file_ptr, seek_offset, SEEK_CUR) != 0)
+            return(-1);
+
+      } else {
+
+	 /*
+	  * skip unknown chunk
+	  */
+
+	 seek_offset = Header.ckSize;
+
+         if (fseek(file_ptr, seek_offset, SEEK_CUR) != 0)
+            return(-1);
+
+      }
+
+   }
+
+   return(sound_position);
+
+}
+
+/*****************************************************************************
+*
+*  Seek past some Audio Interchange File Format (AIFF) headers to sound data.
+*
+*****************************************************************************/
+
+int   aiff_seek_to_sound_data(file_ptr)
+FILE  *file_ptr;
+{
+
+   if (fseek(file_ptr, sizeof(Chunk) + sizeof(SoundDataChunk), SEEK_SET) != 0)
+      return(-1);
+
+   return(0);
+
+}
+
+/*******************************************************************************
+*
+*  Write Audio Interchange File Format (AIFF) headers.
+*
+*******************************************************************************/
+
+int             aiff_write_headers(file_ptr, aiff_ptr)
+FILE            *file_ptr;
+IFF_AIFF        *aiff_ptr;
+{
+
+register int   i;
+register long   seek_offset;
+
+char            temp_sampleRate[10];
+
+Chunk           FormChunk;
+CommonChunk     CommChunk;
+SoundDataChunk  SndDChunk;
+
+#ifdef IFF_LONG 
+   *(unsigned long *) FormChunk.ckID     = IFF_ID_FORM;
+   *(unsigned long *) FormChunk.formType = IFF_ID_AIFF;
+   *(unsigned long *) CommChunk.ckID     = IFF_ID_COMM;
+#else
+   strncpy(FormChunk.ckID,IFF_ID_FORM,4);
+   strncpy(FormChunk.formType,IFF_ID_AIFF,4);
+   strncpy(CommChunk.ckID,IFF_ID_COMM,4);
+#endif
+
+   double_to_extended(&aiff_ptr->sampleRate, temp_sampleRate);
+
+   for (i = 0; i < sizeof(char[10]); i++)
+      CommChunk.sampleRate[i] = temp_sampleRate[i];
+
+   CommChunk.numChannels             = aiff_ptr->numChannels;
+   CommChunk.numSampleFrames         = aiff_ptr->numSampleFrames;
+   CommChunk.sampleSize              = aiff_ptr->sampleSize;
+   SndDChunk.offset                  = aiff_ptr->blkAlgn.offset;
+   SndDChunk.blockSize               = aiff_ptr->blkAlgn.blockSize;
+   *(unsigned long *) SndDChunk.ckID = aiff_ptr->sampleType;
+
+   CommChunk.ckSize = sizeof(CommChunk.numChannels) +
+      sizeof(CommChunk.numSampleFrames) + sizeof(CommChunk.sampleSize) +
+      sizeof(CommChunk.sampleRate);
+
+   SndDChunk.ckSize = sizeof(SoundDataChunk) - sizeof(ChunkHeader) +
+      (CommChunk.sampleSize + BITS_IN_A_BYTE - 1) / BITS_IN_A_BYTE *
+      CommChunk.numChannels * CommChunk.numSampleFrames;
+
+   FormChunk.ckSize = sizeof(Chunk) + SndDChunk.ckSize + sizeof(ChunkHeader) +
+      CommChunk.ckSize;
+
+   if (fseek(file_ptr, 0, SEEK_SET) != 0)
+      return(-1);
+
+   if (fwrite(&FormChunk, sizeof(Chunk), 1, file_ptr) != 1)
+      return(-1);
+
+   if (fwrite(&SndDChunk, sizeof(SoundDataChunk), 1, file_ptr) != 1)
+      return(-1);
+
+   seek_offset = SndDChunk.ckSize - sizeof(SoundDataChunk) +
+      sizeof(ChunkHeader);
+
+   if (fseek(file_ptr, seek_offset, SEEK_CUR) != 0)
+      return(-1);
+
+   if (fwrite(CommChunk.ckID, sizeof(ID), 1, file_ptr) != 1)
+      return(-1);
+
+   if (fwrite(&CommChunk.ckSize, sizeof(long), 1, file_ptr) != 1)
+      return(-1);
+
+   if (fwrite(&CommChunk.numChannels, sizeof(short), 1, file_ptr) != 1)
+      return(-1);
+
+   if (fwrite(&CommChunk.numSampleFrames, sizeof(unsigned long), 1,
+              file_ptr) != 1)
+      return(-1);
+
+   if (fwrite(&CommChunk.sampleSize, sizeof(short), 1, file_ptr) != 1)
+      return(-1);
+
+   if (fwrite(CommChunk.sampleRate, sizeof(char[10]), 1, file_ptr) != 1)
+      return(-1);
+
+   return(0);
+
+}
+
+/*****************************************************************************
+*
+*  bit_stream.c package
+*  Author:  Jean-Georges Fritsch, C-Cube Microsystems
+*
+*****************************************************************************/
+
+/********************************************************************
   This package provides functions to write (exclusive or read)
   information from (exclusive or to) the bit stream.
 
   If the bit stream is opened in read mode only the get functions are
   available. If the bit stream is opened in write mode only the put
   functions are available.
-*/
+********************************************************************/
 
 /*open_bit_stream_w(); open the device to write the bit stream into it    */
 /*open_bit_stream_r(); open the device to read the bit stream from it     */
@@ -483,21 +920,17 @@ Bit_stream_struc *bs;   /* bit stream structure */
 char *bs_filenam;       /* name of the bit stream file */
 int size;               /* size of the buffer */
 {
-	if ( strcmp(bs_filenam, "-" ) == 0 )
-	{
-		bs->pt = stdout;
-	}
-	else if ((bs->pt = fopen(bs_filenam, "wb")) == NULL) {
-		fprintf(stderr,"Could not create \"%s\".\n", bs_filenam);
-		exit(1);
-	}
-	alloc_buffer(bs, size);
-	bs->buf_byte_idx = size-1;
-	bs->buf_bit_idx=8;
-	bs->totbit=0;
-	bs->mode = WRITE_MODE;
-	bs->eob = FALSE;
-	bs->eobs = FALSE;
+   if ((bs->pt = fopen(bs_filenam, "wb")) == NULL) {
+      printf("Could not create \"%s\".\n", bs_filenam);
+      exit(1);
+   }
+   alloc_buffer(bs, size);
+   bs->buf_byte_idx = size-1;
+   bs->buf_bit_idx=8;
+   bs->totbit=0;
+   bs->mode = WRITE_MODE;
+   bs->eob = FALSE;
+   bs->eobs = FALSE;
 }
 
 /* open the device to read the bit stream from it */
@@ -583,8 +1016,7 @@ Bit_stream_struc *bs;   /* bit stream structure */
 void close_bit_stream_w(bs)
 Bit_stream_struc *bs;   /* bit stream structure */
 {
-   putbits(bs, 0, 7);
-   empty_buffer(bs, bs->buf_byte_idx + 1);
+   empty_buffer(bs, bs->buf_byte_idx);
    fclose(bs->pt);
    desalloc_buffer(bs);
 }
@@ -594,7 +1026,7 @@ void alloc_buffer(bs, size)
 Bit_stream_struc *bs;   /* bit stream structure */
 int size;
 {
-   bs->buf = (unsigned char *) mem_alloc(size*sizeof(unsigned
+   bs->buf = (unsigned char FAR *) mem_alloc(size*sizeof(unsigned
               char), "buffer");
    bs->buf_size = size;
 }
@@ -781,7 +1213,7 @@ Bit_stream_struc *bs;   /* bit stream structure */
 unsigned int val;       /* val to write into the buffer */
 int N;                  /* number of bits of val */
 {
- unsigned long aligning;
+ unsigned long aligning, sstell();
 
  if (N > MAX_LENGTH)
     printf("Cannot read or write more than %d bits at a time.\n", MAX_LENGTH);
@@ -797,7 +1229,7 @@ unsigned long byte_ali_getbits(bs, N)
 Bit_stream_struc *bs;   /* bit stream structure */
 int N;                  /* number of bits of val */
 {
- unsigned long aligning;
+ unsigned long aligning, sstell();
 
  if (N > MAX_LENGTH)
     printf("Cannot read or write more than %d bits at a time.\n", MAX_LENGTH);
@@ -832,7 +1264,8 @@ Bit_stream_struc *bs;   /* bit stream structure */
 long sync;      /* sync word maximum 32 bits */
 int N;          /* sync word length */
 {
- unsigned long aligning;
+ double pow();
+ unsigned long aligning, stell();
  unsigned long val;
  long maxi = (int)pow(2.0, (FLOAT)N) - 1;
 
@@ -849,10 +1282,17 @@ int N;          /* sync word length */
  if (end_bs(bs)) return(0);
  else return(1);
 }
+/*****************************************************************************
+*
+*  End of bit_stream.c package
+*
+*****************************************************************************/
 
-/*
- *  CRC error protection package
-*/
+/*****************************************************************************
+*
+*  CRC error protection package
+*
+*****************************************************************************/
 
 void I_CRC_calc(fr_ps, bit_alloc, crc)
 frame_params *fr_ps;
@@ -928,3 +1368,72 @@ unsigned int data, length, *crc;
         }
         *crc &= 0xffff;
 }
+
+/*****************************************************************************
+*
+*  End of CRC error protection package
+*
+*****************************************************************************/
+
+#ifdef  MACINTOSH
+/*****************************************************************************
+*
+*  Set Macintosh file attributes.
+*
+*****************************************************************************/
+
+void    set_mac_file_attr(fileName, vRefNum, creator, fileType)
+char    fileName[MAX_NAME_SIZE];
+short   vRefNum;
+OsType  creator;
+OsType  fileType;
+{
+
+short   theFile;
+char    pascal_fileName[MAX_NAME_SIZE];
+FInfo   fndrInfo;
+
+        CtoPstr(strcpy(pascal_fileName, fileName));
+
+        FSOpen(pascal_fileName, vRefNum, &theFile);
+        GetFInfo(pascal_fileName, vRefNum, &fndrInfo);
+        fndrInfo.fdCreator = creator;
+        fndrInfo.fdType = fileType;
+        SetFInfo(pascal_fileName, vRefNum, &fndrInfo);
+        FSClose(theFile);
+
+}
+#endif
+
+
+#ifdef  MS_DOS
+/* ------------------------------------------------------------------------
+new_ext.
+Puts a new extension name on a file name <filename>.
+Removes the last extension name, if any.
+92-08-19 shn
+------------------------------------------------------------------------ */
+char *new_ext(char *filename, char *extname)
+{
+  int found, dotpos;
+  char newname[80];
+
+  /* First, strip the extension */
+  dotpos=strlen(filename); found=0;
+  do
+  {
+    switch (filename[dotpos])
+    {
+      case '.' : found=1; break;
+      case '\\':                  /* used by MS-DOS */
+      case '/' :                  /* used by UNIX */
+      case ':' : found=-1; break; /* used by MS-DOS in drive designation */
+      default  : dotpos--; if (dotpos<0) found=-1; break;
+    }
+  } while (found==0);
+  if (found==-1) strcpy(newname,filename);
+  if (found== 1) strncpy(newname,filename,dotpos); newname[dotpos]='\0';
+  strcat(newname,extname);
+  return(newname);
+}
+#endif
