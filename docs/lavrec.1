@@ -1,4 +1,4 @@
-.TH "lavrec" "1" "27 August 2003" "MJPEG Tools Team" "MJPEG tools manual"
+.TH "lavrec" "1" "6 December 2001" "MJPEG Linux Square" "MJPEG tools manual"
 
 .SH NAME
 lavrec \- Record MJPEG-video from a zoran/video4linux-device
@@ -10,7 +10,7 @@ lavrec \- Record MJPEG-video from a zoran/video4linux-device
 
 .SH DESCRIPTION
 \fBlavrec\fP can be used to record video in MJPEG format (either
-quicktime or AVI) from a zoran video-capture device, such as
+quicktime, movtar or AVI) from a zoran video-capture device, such as
 the Miro/Pinnacle DC10(+), the Iomega Buz or Linux Media Labs' LML33,
 or from a generic video4linux device, such as the cheap Bt848 or Bt878
 based TV-cards that are being sold in every computer shop around the
@@ -22,7 +22,7 @@ corner.
 
 .TP 8
 .B filename
-The file to record to (*.avi, *.qt). Use a % to record
+The file to record to (*.avi, *.qt, *.movtar). Use a % to record
 to multiple files (using file%02d.avi will record to file00.avi,
 file01.avi, etc). You can also give more than one filename, which
 will have the same effect. This will avoid problems resulting
@@ -38,38 +38,18 @@ which enables MJPEG\-video\-capture from many generic video4linux
 devices (such as Bt848/Bt878\-based ones).
 
 .TP 8
-.BR \-\-software\-encoding\-yuvp
-This option adds support for the EM28XX USB driver. As this driver 
-is V4L2. As the original BTTV software implementation assumes that 
-the driver supports V4L it will not work with the EM28XX driver, not 
-even with the V4L1 emulation layer. This option enables two things:
-  It enables the V4L2 calls to make interaction with this driver possible
-  It select the cards YUV Packed format and converts this in software to YUV Planar
-The process is after this the same as for the BTTV driver.
-ome things of note are the fact that the EM28XX driver expects 48KHz 
-audio recording. If you choose slower things will work, but a lot of 
-deleted/inserted frames will occur. The lower the sample rate, the 
-worse this problem gets. Recording at 48KHz is therefore recommended.
-This code was tested and found working with a DVC100 Pinnacle Dazzle. 
-This option should work with any EM28XX, but this hasnt been tested. 
-It might work for any other V4L2 device that outputs YUV packed format, 
-this has however not been tested. Feedback would be appreciated.
-
-.TP 8
 .BR \-f/\-\-format " [" a | A | q | m ]
 The format in which the video should be saved to the harddisk.
   a - MJPEG AVI
   A - MJPEG AVI with fields exchanged
   q - Quicktime
+  m - Movtar
 .br
 By default, lavrec will look at the extension of the first file
-(*.avi, *.qt) and choose a format based on that.
+(*.avi, *.qt, *.movtar) and choose a format based on that.
 
 .TP 8
 .BR \-i/\-\-input " [" p | P | n | N | s | S | t | T | f | a ]
-or
-.TP 8 
-.BR \-i/\-\-input " input[:norm]
 The recording source and the video source standard format.
  p - PAL through Composite or 1st Bt8x8 input
  P - PAL through SVHS- or 2nd Bt8x8 input
@@ -81,17 +61,6 @@ The recording source and the video source standard format.
  S - SECAM through SVHS- or 2nd Bt8x8 input
  f - SECAM through TV-tuner- or 3rd Bt8x8 input
  a - (or every other letter) Autosense (default)
-.br
-The input can be specified using either single letters or an input number 
-with an optional norm, where the number specifies the n'th input of the 
-card, ranging from 1 to 10. Using a numerical input is necessary when 
-using input four or higher with a card that has more than three inputs, 
-for instance the AverMedia 6 Eyes.
-When using numeric input with the norm it must contain the whole norm name; 
-valid names are pal, ntsc and secam. You can use numeric input selection 
-for cards with only three inputs, too, which most Zoran based cards has. 
-"-i\ 2:pal" used with a Buz would be equivalent to "-i\ P", recording from 
-the S-Video input in PAL format.
 
 .TP 8
 .BI  \-d/\-\-decimation " num"
@@ -205,11 +174,6 @@ MJPEG buffersize in kilobytes. The default is 256 kB.
 .BI \-\-max\-file\-size " num"
 The maximum file size per JPEG file. By default, lavrec uses the maximum
 possible size for that specific recording format.
-
-.TP 8
-.BI \-\-max\-file\-frames " num"
-The maximum number of frames per per JPEG file. By default, the number of
-frames is only limited by other factors, such as maximum file size.
 
 .TP 8
 .BI \-\-file\-flush " num"

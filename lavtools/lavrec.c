@@ -21,11 +21,11 @@
  *      'A': AVI with fields exchanged
  *      'j': JPEG image(s)
  *      'q': quicktime (if compiled with quicktime support)
+ *      'm': movtar (if compiled with movtar support)
  *      Hint: If your AVI video looks strange, try 'A' instead 'a'
  *      and vice versa.
  *		 
  *   -i/--input [pPnNsStTa] --- Input Source:
- *   -i/--input input[:norm]
  *      'p': PAL       Composite Input or first Bt8x8 input
  *      'P': PAL       SVHS-Input or second Bt8x8 input
  *      't': PAL       TV tuner input or third Bt8x8 input
@@ -35,9 +35,7 @@
  *      's': SECAM     Composite Input or first Bt8x8 input
  *      'S': SECAM     SVHS-Input or second Bt8x8 input
  *      'f': SECAM     TV tuner input or third Bt8x8 input
- *      'a': Autosense (default)
- *      input - a number, 1-10
- *      norm  - pal, ntsc or secam
+ *      'a': (or every other letter) Autosense (default)
  *
  *   -d/--decimation num --- Frame recording decimation:
  *      must be either 1, 2 or 4 for identical decimation
@@ -101,12 +99,6 @@
  *      format and need a specific filesize limit, for example to be
  *      able to burn the video files to CD (650 MB).
  *
- *   --max-file-frames --- The maximum number of frames per video file
- *      Intended for those that would like to record video in MJPEG
- *      format and need a specific number of frames per file, for
- *      example to be able to perform easy file and frame number
- *      arithmetics when cutting video manually.
- *
  *   --file-flush  --- How often (in frames) the current output 
  *       file (if any) should be flushed to disk.  (default:60).
  *       Set to 0 if your chosen file-system and system tuning
@@ -138,9 +130,6 @@
  *      'l': line-in
  *      'm': microphone
  *      'c': cdrom
- *      '1': line1
- *      '2': line2
- *      '3': line3
  *
  **** Audio/Video synchronization ***
  *
@@ -200,7 +189,6 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <sys/stat.h>
 #ifdef HAVE_GETOPT_H
 #include <getopt.h>
 #endif
@@ -228,10 +216,15 @@ static void Usage(char *progname)
 #ifdef HAVE_LIBQUICKTIME
            "q"
 #else
-           ""
+           " "
 #endif
-           "]         Format AVI/Quicktime\n");
-	fprintf(stderr, "  -i/--input [pPnNsStTfa]     Input Source or 1-10:norm see manpage\n");
+#ifdef HAVE_LIBMOVTAR
+           "m"
+#else
+           " "
+#endif
+           "]         Format AVI/Quicktime/movtar\n");
+	fprintf(stderr, "  -i/--input [pPnNsStTfa]     Input Source\n");
 	fprintf(stderr, "  -d/--decimation num         Decimation (either 1,2,4 or two digit number)\n");
 	fprintf(stderr, "  -g/--geometry WxH+X+Y       X-style geometry string (part of 768/720x576/480)\n");
 	fprintf(stderr, "  -q/--quality num            Quality [%%]\n");
@@ -245,8 +238,7 @@ static void Usage(char *progname)
 	fprintf(stderr, "  -s/--stereo                 Stereo (default: mono)\n");
 	fprintf(stderr, "  -l/--audio-volume num       Recording level [%%], -1 for mixers not touched\n");
 	fprintf(stderr, "  -m/--mute                   Mute audio output during recording\n");
-	fprintf(stderr, "  -R/--audio-source [lmc123]  Set recording source: (l)ine, (m)icro, (c)d,\n");
-	fprintf(stderr, "                              line(1), line(2), line(3\n");
+	fprintf(stderr, "  -R/--audio-source [lmc]     Set recording source: (l)ine, (m)icro, (c)d\n");
 	fprintf(stderr, "  -c/--synchronization [012]  Level of corrections for synchronization\n");
 	fprintf(stderr, "  -n/--mjpeg-buffers num      Number of MJPEG buffers (default: 64)\n");
 	fprintf(stderr, "  -b/--mjpeg-buffer-size num  Size of MJPEG buffers [Kb] (default: 256)\n");
@@ -254,10 +246,8 @@ static void Usage(char *progname)
 	fprintf(stderr, "  -F/--frequency KHz          When using a TV tuner, frequency in KHz\n");
 	fprintf(stderr, "  -U/--use-read               Use read instead of mmap for recording\n");
 	fprintf(stderr, "  --software-encoding         Use software JPEG-encoding (for BTTV-capture)\n");
-	fprintf(stderr, "  --software-encoding-yuvp    Use software JPEG-encoding (for EM28XX-capture)\n");
 	fprintf(stderr, "  --num-procs num             Number of encoding processes (default: 1)\n");
 	fprintf(stderr, "  --max-file-size num         Maximum size per file (in MB)\n");
-	fprintf(stderr, "  --max-file-frames num       Maximum number of frames per file\n");
 	fprintf(stderr, "  --file-flush num            Flush capture file to disk every num frames\n");
 
 	fprintf(stderr, "  -v/--verbose [012]          verbose level (default: 0)\n");
@@ -553,22 +543,22 @@ static void output_stats(video_capture_stats *stats)
   if (show_stats > 0 && !batch_mode)
   {
     MPEG_timecode_t tc;
+    char infostring[1024];
 
     mpeg_timecode(&tc, stats->num_frames, ((info->video_norm!=1)? 3: 4),
 				  ((info->video_norm!=1)? 25.: 30000./1001.));
     if( stats->prev_sync.tv_usec > stats->cur_sync.tv_usec )
       stats->prev_sync.tv_usec -= 1000000;
     if (info->single_frame)
-      printf("%06d frames captured, press enter for more>", stats->num_frames);
-    else {
-      printf(
+      sprintf(infostring, "%06d frames captured, press enter for more>", stats->num_frames);
+    else
+      sprintf(infostring,
         "%d.%2.2d.%2.2d:%2.2d int:%03ld lst:%3d ins:%3d del:%3d "
         "ae:%3d td1=%.3f td2=%.3f\r",
         tc.h, tc.m, tc.s, tc.f,
         (stats->cur_sync.tv_usec - stats->prev_sync.tv_usec)/1000, stats->num_lost,
         stats->num_ins, stats->num_del, stats->num_aerr, stats->tdiff1, stats->tdiff2);
-      if(verbose) printf("\n"); // Keep lines from overlapping
-    }
+     printf(infostring);
      fflush(stdout);
   }
 }
@@ -577,8 +567,6 @@ static int set_option(const char *name, char *value)
 {
 	/* return 1 means error, return 0 means okay */
 	int nerr = 0;
-	int i = 0;
-	char *norm_i = NULL;
 
 	if (strcmp(name, "format")==0 || strcmp(name, "f")==0)
 	{
@@ -587,14 +575,31 @@ static int set_option(const char *name, char *value)
 #ifdef HAVE_LIBQUICKTIME
                    && value[0]!='q'
 #endif
+#ifdef HAVE_LIBMOVTAR
+                   && value[0]!='m'
+#endif
                    )
 		{
-#ifdef	HAVE_LIBQUICKTIME
-		mjpeg_error("Format (-f/--format) must be j, a, A or q");
+			mjpeg_error("Format (-f/--format) must be j, a"
+#if !defined(HAVE_LIBMOVTAR) && !defined(HAVE_LIBQUICKTIME)
+                           " or"
 #else
-		mjpeg_error("Format (-f/--format) must be j, a or A");
+                           ","
 #endif
-		nerr++;
+                           " A"
+#ifdef HAVE_LIBQUICKTIME
+#ifdef HAVE_LIBMOVTAR
+                           ","
+#else
+                           " or"
+#endif
+                           " q"
+#endif
+#ifdef HAVE_LIBMOVTAR
+                           " or m"
+#endif
+                           );
+			nerr++;
 		}
 	}
 	else if (strcmp(name, "input")==0 || strcmp(name, "i")==0)
@@ -610,42 +615,7 @@ static int set_option(const char *name, char *value)
 			case 't': info->video_norm = 0 /* PAL */; info->video_src = 2 /* TV-tuner */; break;
 			case 'T': info->video_norm = 1 /* NTSC */; info->video_src = 2 /* TV-tuner */; break;
 			case 'f': info->video_norm = 2 /* SECAM */; info->video_src = 2 /* TV-tuner */; break;
-			case 'a':  info->video_norm = 3 /* auto */; info->video_src = -1 /* auto */; break;
-			default:
-				i = atoi(value);
-				if (i>0 && i<11)
-					{
-					info->video_norm = 3 /* auto */; info->video_src = i - 1 /* input */;
-					norm_i = strstr(value, ":");
-					if(norm_i != NULL && strlen(norm_i) > 1)
-						{
-							if (strcasecmp(norm_i + 1, "pal") == 0)
-								{
-									info->video_norm = 0;
-								}
-							else if (strcasecmp(norm_i + 1, "ntsc") == 0)
-								{
-									info->video_norm = 1;
-								}
-							else if (strcasecmp(norm_i + 1, "secam") == 0)
-								{
-									info->video_norm = 0;
-								}
-							else
-								{
-									mjpeg_error("unknown norm: '%s'", norm_i + 1);
-									nerr++;
-									break;
-								}
-						}
-					} 
-				else 
-					{
-						mjpeg_error("numeric input must be between 1 and 10");
-						nerr++;
-					}
-			break;
-
+			default:  info->video_norm = 3 /* auto */; info->video_src = 3 /* auto */; break;
 		}
 		input_source = value[0];
 	}
@@ -760,12 +730,10 @@ static int set_option(const char *name, char *value)
 	else if (strcmp(name, "audio-source")==0 || strcmp(name, "R")==0)
 	{
 		info->audio_src = value[0];
-                if(info->audio_src!='l' && info->audio_src!='m' &&
-                        info->audio_src!='c' && info->audio_src!='1'&&
-                        info->audio_src!='2'&& info->audio_src!='3')
+		if(info->audio_src!='l' && info->audio_src!='m' && info->audio_src!='c')
 		{
 			mjpeg_error("Recording source (-R/--audio-source)"
-				" must be l,m,c,1,2, or 3\n");
+				" must be l,m or c");
 			nerr++;
 		}
 	}
@@ -859,13 +827,6 @@ static int set_option(const char *name, char *value)
 		if (info->num_encoders == 0)
 			info->num_encoders = sysconf(_SC_NPROCESSORS_ONLN);
 	}
-	else if( strcmp(name, "software-encoding-yuvp")==0)
-	{
-		info->software_encoding = 2;
-		/* set the number of enoding processes to the number of processors */
-		if (info->num_encoders == 0)
-			info->num_encoders = sysconf(_SC_NPROCESSORS_ONLN);
-	}
 	else if (strcmp(name, "num-procs")==0)
 	{
 		info->num_encoders = atoi(value);
@@ -873,10 +834,6 @@ static int set_option(const char *name, char *value)
 	else if (strcmp(name, "max-file-size")==0)
 	{
 		info->max_file_size_mb = atoi(optarg);
-	}
-	else if (strcmp(name, "max-file-frames")==0)
-	{
-		info->max_file_frames = atoi(optarg);
 	}
 	else if (strcmp(name, "file-flush")==0)
 	{
@@ -922,10 +879,8 @@ static void check_command_line_options(int argc, char *argv[])
 		{"channel"          ,1,0,0},   /* -C/--channel           */
 		{"use-read"         ,0,0,0},   /* -U/--use-read          */
 		{"software-encoding",0,0,0},   /* --software-encoding    */
-		{"software-encoding-yuvp",0,0,0}, /* --software-encoding-yuvp */
 		{"num-procs"        ,1,0,0},   /* --num-procs            */
 		{"max-file-size"    ,1,0,0},   /* --max-file-size        */
-		{"max-file-frames"  ,1,0,0},   /* --max-file-frames      */
 		{"file-flush"       ,1,0,0},   /* --file-flush           */
 		{"frequency"        ,1,0,0},   /* --frequency/-F         */
 		{0,0,0,0}
@@ -1008,11 +963,15 @@ static void check_command_line_options(int argc, char *argv[])
         /* Try to guess the file type by looking at the extension. */
         if(info->video_format == '\0') {
             if((dotptr = strrchr(argv[optind], '.'))) {
-#ifdef HAVE_LIBQUICKTIME
-                if (!strcasecmp(dotptr+1, "mov"))
-                    info->video_format = 'q';
+#ifdef HAVE_LIBMOVTAR
+                if(!strcasecmp(dotptr+1, "tar") || !strcasecmp(dotptr+1, "movtar"))
+                    info->video_format = 'm';
 #endif
-                if (!strcasecmp(dotptr+1, "avi")) info->video_format = 'a';
+#ifdef HAVE_LIBQUICKTIME
+                if(!strcasecmp(dotptr+1, "mov") || !strcasecmp(dotptr+1, "qt")
+                    || !strcasecmp(dotptr+1, "moov")) info->video_format = 'q';
+#endif
+                if(!strcasecmp(dotptr+1, "avi")) info->video_format = 'a';
             }
             if(info->video_format == '\0') info->video_format = 'a';
         }
@@ -1023,16 +982,9 @@ static void check_command_line_options(int argc, char *argv[])
 static void lavrec_print_properties(void)
 {
 	const char *source;
-	char *tmsg;
 	mjpeg_info("Recording parameters:");
-	if (info->video_format=='q')
-	   tmsg = "Quicktime";
-	else if (info->video_format=='j')
-	   tmsg = "JPEG";
-	else
-	   tmsg = "AVI";
-	mjpeg_info("Output format:      %s", tmsg);
-
+	mjpeg_info("Output format:      %s",info->video_format=='q'?"Quicktime":
+		(info->video_format=='m'?"Movtar":(info->video_format=='j'?"JPEG":"AVI")));
 	switch(input_source)
 	{
 		case 'p': source = info->software_encoding?"BT8x8 1st input PAL\n":"Composite PAL\n"; break;
@@ -1044,7 +996,6 @@ static void lavrec_print_properties(void)
 		case 't': source = info->software_encoding?"BT8x8 3rd input PAL\n":"PAL TV-tuner\n"; break;
 		case 'T': source = info->software_encoding?"BT8x8 3rd input PAL\n":"NTSC TV-tuner\n"; break;
 		case 'f': source = info->software_encoding?"BT8x8 3rd input PAL\n":"SECAM TV-tuner\n"; break;
-//sam Fix numeric source
 		default:  source = "Auto detect\n";
 	}
 	mjpeg_info("Input Source:       %s", source);
@@ -1103,9 +1054,9 @@ static void print_summary(void)
     ((info->video_norm==1)?(30000/1001):25.));
 
   printf("Recording time  : %2d.%2.2d.%2.2d:%2.2d\n"
-         "Lost frames     : %d\n"
-         "A/V sync ins/del: %d/%d\n"
-         "Audio errors    : %d\n",
+         "Lost frames     : %3.3d\n"
+         "A/V sync ins/del: %3.3d/%3.3d\n"
+         "Audio errors    : %3.3d\n",
     tc.h, tc.m, tc.s, tc.f,
     num_lost, num_ins, num_del, num_aerr);
 }
@@ -1155,7 +1106,7 @@ int main(int argc, char **argv)
     if (setfsuid(getuid()) < 0)
     {
       mjpeg_error("Failed to set filesystem user ID: %s",
-        strerror(errno));
+        sys_errlist[errno]);
       return 0;
     }
   }
@@ -1189,12 +1140,7 @@ int main(int argc, char **argv)
   /* Catch and forward selected signals to the signal catcher */
   forward_signals(&sigmask);
 
-  if ((lavrec_main(info)) != 1)
-		{
-			mjpeg_error_exit1("Something went wrong while setting up the card");
-	  		print_summary();
-			lavrec_free(info);
-		}
+  lavrec_main(info);
 
   if (!wait_for_start)
      lavrec_start(info);
