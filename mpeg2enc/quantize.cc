@@ -140,13 +140,10 @@ static int unit_coeff_elimination(DCTblock &block,
     return (block[0] == 0);
 }
 
-//
-// TODO for efficiency the qdctblocks should be an external buffer managed by the calling slice/picture
-// coder.
-//
+
 void MacroBlock::Quantize( Quantizer &quant  )
 {
-    if (best_me->mb_type & MB_INTRA)
+    if (final_me.mb_type & MB_INTRA)
     {
         quant.QuantIntra( dctblocks[0],
                           qdctblocks[0],
@@ -177,13 +174,15 @@ void MacroBlock::Quantize( Quantizer &quant  )
                 cbp &= ~(zero<<(BLOCK_COUNT-1-block));
             }
         }
+        if (cbp)
+            final_me.mb_type|= MB_PATTERN;
     }
 }
 
 void MacroBlock::IQuantize( Quantizer &quant)
 {
     int j;
-    if (best_me->mb_type & MB_INTRA)
+    if (final_me.mb_type & MB_INTRA)
     {
         for (j=0; j<BLOCK_COUNT; j++)
             quant.IQuantIntra(qdctblocks[j], qdctblocks[j], picture->dc_prec, mquant);
