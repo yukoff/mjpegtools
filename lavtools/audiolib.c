@@ -27,10 +27,6 @@
     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
-#ifdef HAVE_CONFIG_H
-#include "../config.h"
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -38,31 +34,27 @@
 #include <signal.h>
 #include <string.h>
 #include <errno.h>
-
-#ifdef HAVE_SYS_SOUNDCARD_H
-#include <sys/soundcard.h>
-#endif
-
-#include <sys/time.h>
+#include <linux/soundcard.h>
 #include <sys/resource.h>
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <sys/time.h>
 
-/* The shared memory things */
-
-#include <sys/ipc.h>
-#include <sys/shm.h>
+#include "mjpeg_logging.h"
 
 #ifndef FORK_NOT_THREAD
 #include <pthread.h>
 #endif
 
-#include "mjpeg_logging.h"
+#define DEBUG(x) 
 
-#include "audiolib.h"
 
+/* The shared memory things */
+
+#include <sys/ipc.h>
+#include <sys/shm.h>
 
 #ifdef FORK_NOT_THREAD
 static int pid; /* pid of child */
@@ -83,7 +75,7 @@ static pthread_t capture_thread;
 
 struct shm_buff_s
 {
-   volatile uint8_t audio_data[N_SHM_BUFFS][BUFFSIZE];
+   volatile unsigned char audio_data[N_SHM_BUFFS][BUFFSIZE];
    volatile int used_flag[N_SHM_BUFFS];
    volatile struct timeval tmstmp[N_SHM_BUFFS];
    volatile int status[N_SHM_BUFFS];
@@ -99,7 +91,6 @@ static int audio_buffer_size = BUFFSIZE;    /* The buffer size actually used */
 
 static int initialized=0;
 static int audio_capt;           /* Flag for capture/playback */
-static int mmap_io;              /* Flag for using either mmap or read,write */
 static int stereo;               /* 0: capture mono, 1: capture stereo */
 static int audio_size;           /* size of an audio sample: 8 or 16 bits */
 static int audio_rate;           /* sampling rate for audio */
@@ -113,7 +104,7 @@ static int n_audio;
 
 static char audio_left_buf[BUFFSIZE];  
 static int audio_bytes_left;   /* Number of bytes in audio_left_buf */
-static unsigned int n_buffs_output, n_buffs_error;
+static int n_buffs_output, n_buffs_error;
 static struct timeval buffer_timestamp;
 static int usecs_per_buff;
 
@@ -121,8 +112,18 @@ static int usecs_per_buff;
 
 void do_audio(void);
 char *audio_strerror(void);
+void audio_shutdown(void);
+long audio_get_buffer_size(void);
+void audio_start(void);
 void set_timestamp(struct timeval tmstmp);
 void swpcpy(char *dst, char *src, int num);
+int audio_read(char *buf, int size, int swap, struct timeval *tmstmp, int *status);
+void audio_get_output_status(struct timeval *tmstmp, int *nb_out, int *nb_err);
+int audio_write(char *buf, int size, int swap);
+
+
+
+int audio_init(int a_read, int a_stereo, int a_size, int a_rate);
 
 
 typedef void *(*start_routine_p)(void *);
@@ -193,8 +194,6 @@ char *audio_strerror(void)
  *
  *      a_read     0: User is going to write (output) audio
  *                 1: User is going to read (input) audio
- *      use_read_write 0: use mmap io as opposed to
- *                     1: read/write system calls
  *      a_stereo   0: mono, 1: stereo
  *      a_size     size of an audio sample: 8 or 16 bits
  *      a_rate     sampling rate for audio
@@ -203,8 +202,7 @@ char *audio_strerror(void)
  *
  */
 
-int audio_init(int a_read, int use_read_write,
-               int a_stereo, int a_size, int a_rate)
+int audio_init(int a_read, int a_stereo, int a_size, int a_rate)
 {
    int i;
 
@@ -216,14 +214,9 @@ int audio_init(int a_read, int use_read_write,
 
    if (a_size != 8 && a_size != 16) { audio_errno = AUDIO_ERR_ASIZE; return -1; }
 
-   if( use_read_write )
-	   mjpeg_info( "Using read(2)/write(2) system call for capture/playpack");
-   else
-	   mjpeg_info( "Using mmap(2) system call for capture/playback");
    /* Copy our parameters into static space */
 
    audio_capt = a_read;
-   mmap_io    = !use_read_write;
    stereo     = a_stereo;
    audio_size = a_size;
    audio_rate = a_rate;
@@ -471,8 +464,7 @@ void swpcpy(char *dst, char *src, int num)
  *
  */
 
-int audio_read( uint8_t *buf, int size, int swap, 
-			    struct timeval *tmstmp, int *status)
+int audio_read(char *buf, int size, int swap, struct timeval *tmstmp, int *status)
 {
    if(!initialized) { audio_errno = AUDIO_ERR_INIT; return -1; }
 
@@ -491,9 +483,9 @@ int audio_read( uint8_t *buf, int size, int swap,
       /* Got an audio sample, copy it to the output buffer */
 
       if(swap && audio_size==16)
-         swpcpy((void*)buf,(void*)shmemptr->audio_data[NBUF(n_audio)],audio_buffer_size);
+         swpcpy(buf,(void*)shmemptr->audio_data[NBUF(n_audio)],audio_buffer_size);
       else
-         memcpy((void*)buf,(void*)shmemptr->audio_data[NBUF(n_audio)],audio_buffer_size);
+         memcpy(buf,(void*)shmemptr->audio_data[NBUF(n_audio)],audio_buffer_size);
 
       /* set the other return values */
 
@@ -512,7 +504,7 @@ int audio_read( uint8_t *buf, int size, int swap,
    return 0;
 }
 
-static void update_output_status(void)
+static void update_output_status()
 {
    while(shmemptr->status[NBUF(n_buffs_output)])
    {
@@ -523,7 +515,7 @@ static void update_output_status(void)
    }
 }
 
-void audio_get_output_status(struct timeval *tmstmp, unsigned int *nb_out, unsigned int *nb_err)
+void audio_get_output_status(struct timeval *tmstmp, int *nb_out, int *nb_err)
 {
    if(tmstmp) *tmstmp = buffer_timestamp;
    if(nb_out) *nb_out = n_buffs_output;
@@ -547,7 +539,7 @@ void audio_get_output_status(struct timeval *tmstmp, unsigned int *nb_out, unsig
  *
  */
 
-int audio_write(uint8_t *buf, int size, int swap)
+int audio_write(char *buf, int size, int swap)
 {
    int nb;
 
@@ -608,9 +600,9 @@ int audio_write(uint8_t *buf, int size, int swap)
       }
 
       if(swap && audio_size==16)
-         swpcpy((void*)shmemptr->audio_data[NBUF(n_audio)],(void*)(buf+nb),audio_buffer_size);
+         swpcpy((void*)shmemptr->audio_data[NBUF(n_audio)],buf+nb,audio_buffer_size);
       else
-         memcpy((void*)shmemptr->audio_data[NBUF(n_audio)],(void*)(buf+nb),audio_buffer_size);
+         memcpy((void*)shmemptr->audio_data[NBUF(n_audio)],buf+nb,audio_buffer_size);
 
       shmemptr->used_flag[NBUF(n_audio)] = 1;
 
@@ -633,63 +625,56 @@ int audio_write(uint8_t *buf, int size, int swap)
  * The audio task
  */
 
-#ifdef HAVE_SYS_SOUNDCARD_H
-static void system_error(const char *str, int fd, int use_strerror)
+static void system_error(char *str, int use_strerror)
 {
    if(use_strerror)
-      sprintf((char*)shmemptr->error_string, "Error %s - %s",str,strerror(errno));
+      sprintf((char*)shmemptr->error_string,"Error %s - %s",str,strerror(errno));
    else
-      sprintf((char*)shmemptr->error_string, "Error %s",str);
+      sprintf((char*)shmemptr->error_string,"Error %s",str);
 
    shmemptr->audio_status = -1;
-   if( fd >= 0 )
-	   close(fd);
 #ifdef FORK_NOT_THREAD
       exit(1);
 #else
 	  pthread_exit(NULL);
 #endif
 }
-#endif /* HAVE_SYS_SOUNDCARD_H */
 
-#ifdef HAVE_SYS_SOUNDCARD_H
 void do_audio(void)
 {
 
-   int fd = -1;
-   int tmp, ret, caps, afmt, frag;
+   int fd, tmp, ret, caps, afmt, frag;
    int nbdone, nbque, ndiff, nbpend, nbset, maxdiff;
 
-   uint8_t *buf = NULL;
+   unsigned char *buf;
    fd_set selectset;
 
    struct count_info count;
    struct audio_buf_info info;
    struct timeval tv;
 
-   const char *audio_dev_name;
+   char *audio_dev_name;
 
 #ifndef FORK_NOT_THREAD
    struct sched_param schedparam;
    sigset_t blocked_signals;
 
    /* Set the capture thread in a reasonable state - cancellation enabled
-      and asynchronous, SIGINT's ignored... */
-   /* PTHREAD_CANCEL_ASYNCHRONOUS is evil. */
-/*   if( pthread_setcancelstate( PTHREAD_CANCEL_ENABLE, NULL) )
-   {
-      system_error( "Bad pthread_setcancelstate", fd, 0 );
-   }
+	  and asynchronous, SIGINT's ignored... */
+   if( pthread_setcancelstate( PTHREAD_CANCEL_ENABLE, NULL) )
+	 {
+	   system_error( "Bad pthread_setcancelstate", 0 );
+	 }
    if( pthread_setcanceltype( PTHREAD_CANCEL_ASYNCHRONOUS, NULL) )
-   {
-      system_error( "Bad pthread_setcanceltype", fd, 0 );
-   }*/
+	 {
+	   system_error( "Bad pthread_setcanceltype", 0 );
+	 }
 
    sigaddset( &blocked_signals, SIGINT );
    if( pthread_sigmask( SIG_BLOCK, &blocked_signals, NULL ))
-   {
-      system_error( "Bad pthread_sigmask", fd, 0 );
-   }
+	 {
+	   system_error( "Bad pthread_sigmask", 0 );
+	 }
 #endif
 	 
 
@@ -704,11 +689,11 @@ void do_audio(void)
    case 2048: frag = 0x7fff000b; break;
    case 1024: frag = 0x7fff000a; break;
    default:
-	 system_error("Audio internal error - audio_buffer_size",fd,0);
+	 system_error("Audio internal error - audio_buffer_size",0);
    }
    /* if somebody plays with BUFFSIZE without knowing what he does ... */
    if (audio_buffer_size>BUFFSIZE)
-      system_error("Audio internal error audio_buffer_size > BUFFSIZE",fd,0);
+      system_error("Audio internal error audio_buffer_size > BUFFSIZE",0);
 
 /*
  * Open Audio device, set number of frags wanted
@@ -722,10 +707,10 @@ void do_audio(void)
    else
       fd=open(audio_dev_name, O_RDWR,   0);
 
-   if (fd<0) system_error(audio_dev_name,fd,1);
+   if (fd<0) system_error(audio_dev_name,1);
 
    ret = ioctl(fd, SNDCTL_DSP_SETFRAGMENT, &frag);
-   if(ret<0) system_error("in ioctl SNDCTL_DSP_SETFRAGMENT", fd, 1);
+   if(ret<0) system_error("in ioctl SNDCTL_DSP_SETFRAGMENT",1);
 
 /*
  * Setup sampling parameters.
@@ -734,34 +719,29 @@ void do_audio(void)
    afmt = (audio_size==16) ? AFMT_S16_LE : AFMT_U8;
    tmp = afmt;
    ret = ioctl(fd, SNDCTL_DSP_SETFMT, &tmp);
-   if(ret<0 || tmp!=afmt) system_error("setting sound format",fd,0);
+   if(ret<0 || tmp!=afmt) system_error("setting sound format",0);
 
    tmp = stereo; /* 0=mono, 1=stereo */
    ret = ioctl(fd, SNDCTL_DSP_STEREO, &tmp);
-   if(ret<0 || tmp!=stereo) system_error("setting mono/stereo",fd,0);
+   if(ret<0 || tmp!=stereo) system_error("setting mono/stereo",0);
 
    tmp = audio_rate;
    ret = ioctl(fd, SNDCTL_DSP_SPEED, &tmp);
-   if(ret<0) {
-       system_error("setting sound rate",fd,0);
-   } else if(tmp != audio_rate) {
-       mjpeg_warn("Sound card told us it's using rate %dHz instead of %dHz", tmp, audio_rate);
-   }
+   if(ret<0 || abs(tmp-audio_rate) > 5) system_error("setting sound rate",0);
 
 /* Calculate number of bytes corresponding to TIME_STAMP_TOL */
 
-   maxdiff = audio_byte_rate / (1000000/TIME_STAMP_TOL);
+   maxdiff = TIME_STAMP_TOL*audio_byte_rate/1000000;
 
 /*
  * Check that the device has capability to do mmap and trigger
  */
-   
-   if(mmap_io) {
-	   ret = ioctl(fd, SNDCTL_DSP_GETCAPS, &caps);
-	   if(ret<0) system_error("getting audio device capabilities",fd,1);
-	   if (!(caps & DSP_CAP_TRIGGER) || !(caps & DSP_CAP_MMAP))
-		   system_error("Soundcard cant do mmap or trigger",fd,0);
-   }
+
+   ret = ioctl(fd, SNDCTL_DSP_GETCAPS, &caps);
+   if(ret<0) system_error("getting audio device capabilities",1);
+
+   if (!(caps & DSP_CAP_TRIGGER) || !(caps & DSP_CAP_MMAP))
+      system_error("Soundcard cant do mmap or trigger",0);
 
 /*
  * Get the size of the input/output buffer and do the mmap
@@ -772,10 +752,10 @@ void do_audio(void)
    else
       ret = ioctl(fd, SNDCTL_DSP_GETOSPACE, &info);
 
-   if(ret<0) system_error("in ioctl SNDCTL_DSP_GET[IO]SPACE",fd,1);
+   if(ret<0) system_error("in ioctl SNDCTL_DSP_GET[IO]SPACE",1);
 
    if (info.fragsize != audio_buffer_size)
-      system_error("Soundcard fragment size unexpected",fd,0);
+      system_error("Soundcard fragment size unexpected",0);
 
 /*
  * Original comment:
@@ -795,32 +775,26 @@ void do_audio(void)
 
    if (info.fragstotal < 2)
    {
-	   system_error("Could not get enough audio buffer fragments",fd,0);
+	   system_error("Could not get enough audio buffer fragments",0);
    }
 
    tmp = info.fragstotal*info.fragsize;
 
-   if( mmap_io )
-   {
-	   if (audio_capt)
-		   buf=mmap(NULL, tmp, PROT_READ , MAP_SHARED, fd, 0);
-	   else
-		   buf=mmap(NULL, tmp, PROT_WRITE, MAP_SHARED, fd, 0);
+   if (audio_capt)
+      buf=mmap(NULL, tmp, PROT_READ , MAP_SHARED, fd, 0);
+   else
+      buf=mmap(NULL, tmp, PROT_WRITE, MAP_SHARED, fd, 0);
 
-	   if (buf==MAP_FAILED)
-		   system_error("mapping audio buffer "
-                        "(consider using read/write instead of mmap)",fd, 1);
-	   
-	   /*
-		* Put device into hold
-		*/
+   if (buf==MAP_FAILED)
+      system_error("mapping audio buffer",1);
 
-	   tmp = 0;
-	   ret = ioctl(fd, SNDCTL_DSP_SETTRIGGER, &tmp);
-	   if(ret<0) system_error("in ioctl SNDCTL_DSP_SETTRIGGER",fd,1);
+/*
+ * Put device into hold
+ */
 
-   }
-
+   tmp = 0;
+   ret = ioctl(fd, SNDCTL_DSP_SETTRIGGER, &tmp);
+   if(ret<0) system_error("in ioctl SNDCTL_DSP_SETTRIGGER",1);
 
 /*
  * Signal the parent that initialization is done
@@ -843,6 +817,7 @@ void do_audio(void)
    nbset  = 0;
    if(!audio_capt)
    {
+//      while(!shmemptr->used_flag[0])
       while(!shmemptr->audio_start)
       {
          usleep(10000);
@@ -859,53 +834,37 @@ void do_audio(void)
       for(nbque=0;nbque<info.fragstotal;nbque++)
       {
          if(!shmemptr->used_flag[NBUF(nbque)]) break;
-         if (mmap_io) {
-            memcpy(buf+nbque*info.fragsize,
-                   (void*) shmemptr->audio_data[NBUF(nbque)],
-                   info.fragsize);
-         } else {
-            write(fd,(void *)shmemptr->audio_data[NBUF(nbque)],
-                  info.fragsize);
-         }
+         memcpy(buf+nbque*info.fragsize,
+                (void*) shmemptr->audio_data[NBUF(nbque)],
+                info.fragsize);
          /* Mark the buffer as free */
          shmemptr->used_flag[NBUF(nbque)] = 0;
       }
       for(nbset=nbque;nbset<info.fragstotal;nbset++)
-         if (mmap_io) {
-            memset(buf+nbset*info.fragsize,0,info.fragsize);
-         } else {
-            char buf[info.fragsize];
-            memset(buf,0,info.fragsize);
-            write(fd,buf,info.fragsize);
-         }
+         memset(buf+nbset*info.fragsize,0,info.fragsize);
    }
 
 #ifndef FORK_NOT_THREAD
    /* Now we're ready to go move to Real-time scheduling... */
    schedparam.sched_priority = 1;
 
-   if(setpriority(PRIO_PROCESS, 0, -20)) { /* Give myself maximum priority */ 
-      mjpeg_warn("Unable to set negative priority for audio thread.");
-   }
-   if( (ret = pthread_setschedparam( pthread_self(), SCHED_FIFO, &schedparam ) ) ) {
-      mjpeg_warn("Pthread Real-time scheduling for audio thread could not be enabled."); 
-   }
+   if( (ret = pthread_setschedparam( pthread_self(), SCHED_RR, &schedparam ) ) )
+	 {
+		 mjpeg_warn("Pthread Real-time scheduling could not be enabled.\n"); 
+	 }
 #endif
 
 /*
- * Fire up audio device for mmap capture playback (not necessary for read)
+ * Fire up audio device
  */
 
-   if( mmap_io )
-   {
-	   if(audio_capt)
-		   tmp = PCM_ENABLE_INPUT;
-	   else
-		   tmp = PCM_ENABLE_OUTPUT;
+   if(audio_capt)
+      tmp = PCM_ENABLE_INPUT;
+   else
+      tmp = PCM_ENABLE_OUTPUT;
 
-	   ret = ioctl(fd, SNDCTL_DSP_SETTRIGGER, &tmp);
-	   if(ret<0) system_error("in ioctl SNDCTL_DSP_SETTRIGGER",fd,1);
-   }
+   ret = ioctl(fd, SNDCTL_DSP_SETTRIGGER, &tmp);
+   if(ret<0) system_error("in ioctl SNDCTL_DSP_SETTRIGGER",1);
 
 
    /* The recording/playback loop */
@@ -914,35 +873,15 @@ void do_audio(void)
    {
       /* Wait until new audio data can be read/written */
 
+      FD_ZERO(&selectset);
+      FD_SET(fd, &selectset);
 
-	   if( mmap_io )
-	   {
-		   FD_ZERO(&selectset);
-		   FD_SET(fd, &selectset);
-           retry:
-		   if(audio_capt)
-			   ret = select(fd+1, &selectset, NULL, NULL, NULL);
-		   else 
-			   ret = select(fd+1, NULL, &selectset, NULL, NULL);
-		   
-		   if(ret<0)
-                   {
-                           if (errno == EINTR)
-                                goto retry;
-                           else
-                                system_error("waiting on audio with select",fd,1);
-                   }
-	   }
-	   else
-	   {
-          if (audio_capt) {
-             if( read(fd, (void *)shmemptr->audio_data[NBUF(nbdone)], info.fragsize ) 
-                     != info.fragsize )
-             {
-                system_error( "Sound driver returned partial fragment!\n", fd,1 );
-             }
-          }
-	   }
+      if(audio_capt)
+         ret = select(fd+1, &selectset, NULL, NULL, NULL);
+      else
+         ret = select(fd+1, NULL, &selectset, NULL, NULL);
+
+      if(ret<0) system_error("waiting on audio with select",1);
 
       /* Get time - this time is after at least one buffer has been
          recorded/played (because select did return), and before the
@@ -957,7 +896,7 @@ void do_audio(void)
       else
          ret = ioctl(fd, SNDCTL_DSP_GETOPTR, &count);
 
-      if (ret<0) system_error("in ioctl SNDCTL_DSP_GET[IO]PTR",fd,1);
+      if (ret<0) system_error("in ioctl SNDCTL_DSP_GET[IO]PTR",1);
 
       /* Get the difference of minimum number of bytes after the select call
          and bytes actually present - this gives us a measure of accuracy
@@ -974,7 +913,7 @@ void do_audio(void)
 		 problems...
 	   */
 	  /*
-		mjpeg_info( "CB=%08d ND=%06d BL=%03d NB=%d", count.bytes, ndiff, count.blocks, NBUF(nbdone) );
+		mjpeg_info( "CB=%08d ND=%06d BL=%03d NB=%d\n", count.bytes, ndiff, count.blocks, NBUF(nbdone) );
 	  */
       if(ndiff>maxdiff)
 	  {
@@ -991,7 +930,6 @@ void do_audio(void)
 			  tv.tv_sec -= 1;
 		  }
 	  }
-
       if(audio_capt)
       {
          /* if exit_flag is set, exit immediatly */
@@ -999,7 +937,6 @@ void do_audio(void)
          if(shmemptr->exit_flag)
 		   {
             shmemptr->audio_status = -1;
-			close(fd);
 #ifdef FORK_NOT_THREAD
             exit(0);
 #else
@@ -1008,11 +945,8 @@ void do_audio(void)
          }
 
          /* copy the ready buffers to our audio ring buffer */
-		 
-		 if( mmap_io )
-			 nbpend = count.blocks;
-		 else
-			 nbpend = 1;
+
+         nbpend = count.blocks;
 
          while(nbpend)
          {
@@ -1020,21 +954,19 @@ void do_audio(void)
             /* Check if buffer nbdone in the ring buffer is free */
 
             if(shmemptr->used_flag[NBUF(nbdone)])
-               system_error("Audio ring buffer overflow",fd,0);
-			
-			if( mmap_io )
-				memcpy((void*) shmemptr->audio_data[NBUF(nbdone)],
-					   buf+(nbdone%info.fragstotal)*info.fragsize,
-					   info.fragsize);
+               system_error("Audio ring buffer overflow",0);
+
+            memcpy((void*) shmemptr->audio_data[NBUF(nbdone)],
+                   buf+(nbdone%info.fragstotal)*info.fragsize,
+                   info.fragsize);
 
             /* Get the status of the sound buffer after copy,
                this permits us to see if an overrun occured */
 
             ret = ioctl(fd, SNDCTL_DSP_GETIPTR, &count);
-            if(ret<0) system_error("in ioctl SNDCTL_DSP_GETIPTR",fd,1);
-			
-			if( mmap_io )
-				nbpend += count.blocks;
+            if(ret<0) system_error("in ioctl SNDCTL_DSP_GETIPTR",1);
+
+            nbpend += count.blocks;
 
             /* if nbpend >= total frags, a overrun most probably occured */
             shmemptr->status[NBUF(nbdone)] = (nbpend >= info.fragstotal) ? -1 : 1;
@@ -1057,7 +989,7 @@ void do_audio(void)
          {
             /* check for overflow of the status flags in the ringbuffer */
             if(shmemptr->status[NBUF(nbdone)])
-               system_error("Audio ring buffer overflow",fd,0);
+               system_error("Audio ring buffer overflow",0);
             /* We have a buffer underrun during write if nbdone>=nbque */
             shmemptr->tmstmp[NBUF(nbdone)] = tv;
             shmemptr->status[NBUF(nbdone)] = (nbdone<nbque) ? 1 : -1;
@@ -1072,7 +1004,6 @@ void do_audio(void)
          if(shmemptr->exit_flag && nbdone >= nbque)
          {
             shmemptr->audio_status = -1;
-			close(fd);
 #ifdef FORK_NOT_THREAD
             exit(0);
 #else
@@ -1088,14 +1019,9 @@ void do_audio(void)
             if(!shmemptr->used_flag[NBUF(nbque)]) break;
 
             if(nbque>nbdone)
-               if (mmap_io) {
-                  memcpy(buf+(nbque%info.fragstotal)*info.fragsize,
-                         (void*) shmemptr->audio_data[NBUF(nbque)],
-                         info.fragsize);
-               } else {
-                  write(fd,(void *)shmemptr->audio_data[NBUF(nbque)],
-                        info.fragsize);
-               }
+               memcpy(buf+(nbque%info.fragstotal)*info.fragsize,
+                      (void*) shmemptr->audio_data[NBUF(nbque)],
+                      info.fragsize);
 
             /* Mark the buffer as free */
             shmemptr->used_flag[NBUF(nbque)] = 0;
@@ -1105,21 +1031,12 @@ void do_audio(void)
          if(nbset<nbque) nbset = nbque;
          while(nbset-nbdone < info.fragstotal)
          {
-            if (mmap_io) {
-               memset(buf+(nbset%info.fragstotal)*info.fragsize,0,info.fragsize);
-            } else {
-               char buf[info.fragsize];
-               memset(buf,0,info.fragsize);
-               write(fd,buf,info.fragsize);
-            }
+            memset(buf+(nbset%info.fragstotal)*info.fragsize,0,info.fragsize);
             nbset++;
          }
       }
    }
 }
-#else
-void do_audio()
-{
-  fprintf(stderr, "Unsupported audio system in audiolib.c: no soundcard.hn");
-}
-#endif
+
+
+

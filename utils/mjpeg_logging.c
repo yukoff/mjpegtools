@@ -64,22 +64,18 @@ default_mjpeg_log_handler(log_level_t level, const char message[])
   case LOG_ERROR:
     fprintf(stderr, "**ERROR: %s", message);
     fflush(stdout);
-    fflush(stderr);
     break;
   case LOG_DEBUG:
     fprintf(stderr, "--DEBUG: %s", message);
     fflush(stdout);
-    fflush(stderr);
     break;
   case LOG_WARN:
     fprintf(stderr, "++ WARN: %s", message);
     fflush(stdout);
-    fflush(stderr);
     break;
   case LOG_INFO:
     fprintf(stderr, "   INFO: %s", message);
     fflush(stdout);
-    fflush(stderr);
     break;
   default:
     assert(0);
