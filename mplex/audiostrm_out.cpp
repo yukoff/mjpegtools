@@ -25,8 +25,12 @@
 #include <assert.h>
 
 #include "mjpeg_types.h"
+#include "fastintfns.h"
 #include "audiostrm.hpp"
 #include "multiplexor.hpp"
+
+const unsigned int LPCMStream::default_buffer_size = 58*1024;
+const unsigned int LPCMStream::ticks_per_frame_90kHz = 150;
 
 
 AudioStream::AudioStream(IBitStream &ibs, Multiplexor &into) : 
@@ -34,6 +38,15 @@ AudioStream::AudioStream(IBitStream &ibs, Multiplexor &into) :
 	num_syncword(0)
 {
     FRAME_CHUNK = 24;
+	for( int i = 0; i <2 ; ++i )
+		num_frames[i] = size_frames[i] = 0;
+}
+
+void AudioStream::InitAUbuffer()
+{
+	unsigned int i;
+	for( i = 0; i < aunits.BUF_SIZE; ++i )
+		aunits.init( new AAunit );
 }
 
 
@@ -49,6 +62,15 @@ bool AudioStream::RunOutComplete()
 			( muxinto.running_out && RequiredPTS() >= muxinto.runout_PTS));
 }
 
+bool AudioStream::AUBufferNeedsRefill()
+{
+    return 
+        !eoscan
+        && ( aunits.current()+FRAME_CHUNK > last_buffered_AU
+             || 
+             bs.BufferedBytes() < muxinto.sector_size
+            );
+}
 
 /******************************************************************
 	Output_Audio
