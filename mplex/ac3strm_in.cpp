@@ -66,7 +66,6 @@ static const unsigned int ac3_frequency[4] =
 AC3Stream::AC3Stream(IBitStream &ibs, Multiplexor &into) : 
 	AudioStream( ibs, into )
 {
-num_frames = 0;
 }
 
 bool AC3Stream::Probe(IBitStream &bs )
@@ -221,6 +220,7 @@ void AC3Stream::Init ( const int _stream_num)
                 bs.StreamName()
                 );
 
+	InitAUbuffer();
 	AU_start = bs.bitcount();
     if (bs.GetBits(16)==AC3_SYNCWORD)
     {
@@ -239,7 +239,7 @@ void AC3Stream::Init ( const int _stream_num)
 		num_frames++;
         access_unit.start = AU_start;
 		access_unit.length = framesize;
-        mjpeg_info( "AC3 frame size = %d", framesize );
+        mjpeg_info( "AC3 frame size = %d\n", framesize );
         bit_rate = ac3_bitrate_index[framesize_code>>1];
 		samples_per_second = ac3_frequency[frequency];
 
@@ -250,7 +250,7 @@ void AC3Stream::Init ( const int _stream_num)
 		access_unit.DTS = access_unit.PTS;
 		access_unit.dorder = decoding_order;
 		++decoding_order;
-		aunits.Append( access_unit );
+		aunits.append( access_unit );
 
     } else
     {
@@ -288,14 +288,11 @@ void AC3Stream::FillAUbuffer(unsigned int frames_to_buffer )
         bs.SeekFwdBits(skip);
 		prev_offset = AU_start;
 		AU_start = bs.bitcount();
-        
-				 
-
         if( AU_start - prev_offset != access_unit.length*8 )
         {
             mjpeg_warn( "Discarding incomplete final frame AC3 stream %d!",
                        stream_num);
-            aunits.DropLast();
+            aunits.droplast();
             --decoding_order;
             break;
         }
@@ -327,7 +324,7 @@ void AC3Stream::FillAUbuffer(unsigned int frames_to_buffer )
 		access_unit.DTS = access_unit.PTS;
 		access_unit.dorder = decoding_order;
 		decoding_order++;
-		aunits.Append( access_unit );
+		aunits.append( access_unit );
 		num_frames++;
 		
 		num_syncword++;
@@ -385,7 +382,6 @@ unsigned int
 AC3Stream::ReadPacketPayload(uint8_t *dst, unsigned int to_read)
 {
     bitcount_t read_start = bs.GetBytePos();
-
     // Remember to change StreamHeaderLen if you write a different
     // length re-using this code...
     unsigned int bytes_read = bs.GetBytes( dst+4, to_read-4 );

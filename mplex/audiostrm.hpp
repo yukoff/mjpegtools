@@ -42,10 +42,12 @@ public:
     unsigned int num_syncword;
 
 protected:
+    virtual bool AUBufferNeedsRefill();
 	virtual void FillAUbuffer(unsigned int frames_to_buffer) = 0;
+	void InitAUbuffer();
     
 	/* State variables for scanning source bit-stream */
-    AUnit access_unit;
+    AAunit access_unit;
     unsigned int header_skip;
 }; 	
 
@@ -172,42 +174,37 @@ private:
     unsigned int samples_per_second;
     unsigned int channels;
     unsigned int bits_per_sample;
-    unsigned int whole_unit;
     unsigned int bytes_per_frame;
     unsigned int frame_index;
     unsigned int dynamic_range_code;
     LpcmParams *parms;
 }; 	
 
-
 class SUBPStream : public AudioStream
 {
 public:   
-    SUBPStream(IBitStream &ibs,SubtitleStreamParams* params,Multiplexor &into );
+    SUBPStream(IBitStream &ibs,Multiplexor &into );
     virtual void Init(const int stream_num);
     virtual void Close();
-    static bool Probe(IBitStream &bs );
     // TODO: rough and ready measure...
     virtual unsigned int NominalBitRate() {return 50*1024;}
     virtual unsigned int ReadPacketPayload(uint8_t *dst, unsigned int to_read);
     virtual unsigned int StreamHeaderSize() { return 1; }
-    // OutputSector from AudioStream allows merging of Units -- we don't
-    void OutputSector ( );
+    
 
 private:
+	void OutputHdrInfo();
 	virtual void FillAUbuffer(unsigned int frames_to_buffer);
-    bool ParseAUBitwise();
-	bool CheckAndSkipHeader( struct  vobsub_header_s& vobsub, bool bitwise);
-    //static const unsigned int default_buffer_size;
+    
+    static const unsigned int default_buffer_size;
 
 	/* State variables for scanning source bit-stream */
-
-    //unsigned int stream_num;
+    unsigned int framesize;
+    unsigned int samples_per_second;
+    unsigned int bit_rate;
+    unsigned int stream_num;
+    unsigned int frequency	;
     unsigned int num_frames;
-    int64_t     initial_offset;  // DTS of first Subp.
-    SubtitleStreamParams* parms;
-    int8_t sub_stream_id; // substream_id
-    int8_t last_sub_stream_id; // substream_id
 }; 	
 
 
