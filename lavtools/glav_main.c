@@ -31,13 +31,9 @@
 #include <unistd.h>
 #include <mpegconsts.h>
 #include <mpegtimecode.h>
-#include <sys/time.h>
 
 #define PLAY_PROG "lavplay"
-#define LAVPLAY_VSTR "lavplay" VERSION /* Expected version info */
-
-static struct timeval time_when_pressed;
-static int number_of_skipped_frames;
+#define LAVPLAY_VSTR "lavplay" LAVPLAY_VERSION /* Expected version info */
 
 int verbose = 1;
 static GTK_xlav *gtk_xlav;
@@ -49,8 +45,7 @@ static int pid;
 
 static double fps;
 static int cur_pos, total_frames, cur_speed=1, old_speed=999999;
-static int slider_pause;
-static int slider_pos;
+static int slider_pause = 0;
 
 static int ff_stat=0, fr_stat=0;
 static int ff_speed[4] = { 1, 3, 10, 30 };
@@ -66,6 +61,7 @@ static int savetype = 0;
 static char inpbuff[MAXINP];
 static int inplen = 0;
 
+static int hscale_down = 0;
 static int frame_skip_button_up = 1;
 static char frame_skip_char;
 
@@ -92,9 +88,7 @@ static void calc_timecode(int pos, int do_frames)
 static void store_filename(GtkFileSelection *selector, gpointer user_data) {
    char str[256];
    const char *name;
-
-   /* First easy fix, Bernhard */
-   selected_filename = (char*)gtk_file_selection_get_filename (GTK_FILE_SELECTION(file_selector));
+   selected_filename = gtk_file_selection_get_filename (GTK_FILE_SELECTION(file_selector));
    name = selected_filename;
    if(name==0) return;
    switch(savetype) {
@@ -116,18 +110,14 @@ static void create_file_selection(void) {
       default: printf("Error in create_file_selection\n"); return; break;
    }
    file_selector = gtk_file_selection_new(label);
-
-   /* Next problem, Bernhard */
-   g_signal_connect_swapped(G_OBJECT(GTK_FILE_SELECTION
-                           (file_selector)->ok_button),  "clicked", 
-                           (GtkSignalFunc)store_filename, NULL);
+   gtk_signal_connect (GTK_OBJECT(GTK_FILE_SELECTION(file_selector)->ok_button),
+               "clicked", GTK_SIGNAL_FUNC (store_filename), NULL);
    /* Ensure that the dialog box is destroyed when the user clicks a button. */
-   g_signal_connect_swapped(G_OBJECT (GTK_FILE_SELECTION(file_selector)->ok_button),
-                    "clicked", G_CALLBACK (gtk_widget_destroy),
+   gtk_signal_connect_object (GTK_OBJECT (GTK_FILE_SELECTION(file_selector)->ok_button),
+                    "clicked", GTK_SIGNAL_FUNC (gtk_widget_destroy),
                     (gpointer) file_selector);
-
-   g_signal_connect_swapped(G_OBJECT (GTK_FILE_SELECTION(file_selector)->cancel_button),
-                    "clicked", G_CALLBACK (gtk_widget_destroy),
+   gtk_signal_connect_object (GTK_OBJECT (GTK_FILE_SELECTION(file_selector)->cancel_button),
+                    "clicked", GTK_SIGNAL_FUNC (gtk_widget_destroy),
                     (gpointer) file_selector);
    
    /* Display that dialog */
@@ -138,45 +128,30 @@ gint key_press_cb(GtkWidget * widget, GdkEventKey* event, gpointer data )
 {
    int need_pause=FALSE;
    int n=1;
+   hscale_down=1;
    switch (event->keyval) {
       case GDK_0:/* go to beginning of file */
-         write(out_pipe,"s0\n",3); /* go to beginning */
+         gtk_adjustment_set_value(GTK_ADJUSTMENT(gtk_xlav->timeslider),(gfloat)0);
          break;
       case GDK_9: /* go to end of file */
          need_pause=TRUE;
-         write(out_pipe,"s10000000\n",10); /* go to end */
+         write(out_pipe,"s10000000\n",10); break;  /* go to end */
          break;
       case GDK_parenleft: /* mark start of selection */
       case GDK_Home:
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->BSSelStart),"clicked",(gpointer)1);
+         gtk_signal_emit_by_name(GTK_OBJECT(gtk_xlav->BSSelStart),"clicked",(gpointer)1);
          break;
       case GDK_parenright: /* mark end of selection */
       case GDK_End:
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->BSSelEnd),"clicked",(gpointer)1);
-         break;
-      case GDK_bracketleft: /* skip to selected start */
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->BGotoSelStart),"clicked",(gpointer)1);
-         break;
-      case GDK_bracketright: /* skip to selected end */
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->BGotoSelEnd),"clicked",(gpointer)1);
-         break;
-      case GDK_a: /* Save all */
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->BSaveAll),"clicked",(gpointer)1);
-         break;
-      case GDK_v: /* Save */
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->BSaveSel),"clicked",(gpointer)1);
-         break;
-      case GDK_q: /* Exit */
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->Exit),"clicked",(gpointer)1);
+         gtk_signal_emit_by_name(GTK_OBJECT(gtk_xlav->BSSelEnd),"clicked",(gpointer)1);
          break;
       case GDK_l: /* some number of frames right */
-      case GDK_L:
       case GDK_Right:
          need_pause=TRUE;
-         g_signal_stop_emission_by_name(G_OBJECT(gtk_xlav->xlav), "key_press_event");
+         gtk_signal_emit_stop_by_name(GTK_OBJECT(gtk_xlav->xlav), "key_press_event");
          n=1;
          if(event->state & GDK_CONTROL_MASK) {
-            write(out_pipe,"s10000000\n",10); /* go to end */
+            write(out_pipe,"s10000000\n",10); break;  /* go to end */
             break;
          } else if(event->state & GDK_MOD1_MASK) {
             n=50;
@@ -186,13 +161,11 @@ gint key_press_cb(GtkWidget * widget, GdkEventKey* event, gpointer data )
          skip_num_frames(n);
          break;
       case GDK_h: /* some number of frames left */
-      case GDK_H:
       case GDK_Left:
-         g_signal_stop_emission_by_name(GTK_OBJECT(gtk_xlav->xlav), "key_press_event");
+         gtk_signal_emit_stop_by_name(GTK_OBJECT(gtk_xlav->xlav), "key_press_event");
          n=-1;
          if(event->state & GDK_CONTROL_MASK) { /* go to beginning  */
-            write(out_pipe,"s0\n",3); /* go to beginning */
-	    break;
+            gtk_adjustment_set_value(GTK_ADJUSTMENT(gtk_xlav->timeslider),(gfloat)0);
          } else if(event->state & GDK_MOD1_MASK) {
             n=-50;
          } else if (event->state & GDK_SHIFT_MASK) { 
@@ -217,35 +190,32 @@ gint key_press_cb(GtkWidget * widget, GdkEventKey* event, gpointer data )
          need_pause=TRUE;
          skip_num_frames(-30);
          break;
-      case GDK_c: /* clear selection */
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->BClearSel),"clicked",(gpointer)1);
-         break;
       case GDK_x: /* cut selection */
       case GDK_Delete:
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->BECut),"clicked",(gpointer)1);
+         gtk_signal_emit_by_name(GTK_OBJECT(gtk_xlav->BECut),"clicked",(gpointer)1);
          break;
       case GDK_y: /* copy (yank) selection */
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->BECopy),"clicked",(gpointer)1);
+         gtk_signal_emit_by_name(GTK_OBJECT(gtk_xlav->BECopy),"clicked",(gpointer)1);
          break;
       case GDK_p: /* paste selection */
       case GDK_Insert:
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->BEPaste),"clicked",(gpointer)1);
+         gtk_signal_emit_by_name(GTK_OBJECT(gtk_xlav->BEPaste),"clicked",(gpointer)1);
          break;
       case GDK_f: /*  play (forward) */
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->play),"clicked",(gpointer)4);
+         gtk_signal_emit_by_name(GTK_OBJECT(gtk_xlav->play),"clicked",(gpointer)4);
          break;
       case GDK_F: /* fast forward */
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->ff),"clicked",(gpointer)5);
+         gtk_signal_emit_by_name(GTK_OBJECT(gtk_xlav->ff),"clicked",(gpointer)5);
          break;
       case GDK_r: /* play reverse */
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->rew),"clicked",(gpointer)2);
+         gtk_signal_emit_by_name(GTK_OBJECT(gtk_xlav->rew),"clicked",(gpointer)2);
          break;
       case GDK_R: /* fast reverse */
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->fr),"clicked",(gpointer)1);
+         gtk_signal_emit_by_name(GTK_OBJECT(gtk_xlav->fr),"clicked",(gpointer)1);
          break;
       case GDK_s: /* stop */
       case GDK_S:
-         g_signal_emit_by_name(G_OBJECT(gtk_xlav->stop),"clicked",(gpointer)3);
+         gtk_signal_emit_by_name(GTK_OBJECT(gtk_xlav->stop),"clicked",(gpointer)3);
          break;
       case GDK_1: /* go 5 seconds forward */
          skip_num_frames(150);
@@ -294,6 +264,7 @@ gint key_press_cb(GtkWidget * widget, GdkEventKey* event, gpointer data )
          write(out_pipe,"p0\n",3); /* pause on all keys */
       }
    }
+   hscale_down=0;
    return 0;
 }
 
@@ -309,8 +280,8 @@ static void quick_message(const char *message) {
    
    /* Ensure that the dialog box is destroyed when the user clicks ok. */
    
-   g_signal_connect_swapped(G_OBJECT (okay_button), "clicked",
-                         G_CALLBACK (gtk_widget_destroy), G_OBJECT(dialog));
+   gtk_signal_connect_object (GTK_OBJECT (okay_button), "clicked",
+                              GTK_SIGNAL_FUNC (gtk_widget_destroy), GTK_OBJECT(dialog));
    gtk_container_add (GTK_CONTAINER (GTK_DIALOG(dialog)->action_area),
                       okay_button);
 
@@ -325,11 +296,6 @@ static void quick_message(const char *message) {
 
 void dispatch_input(void)
 {
-char * token ;
-char * tokens[ 4] ;
-int i ;
-
-
    /* A line starting with '-' should be ignored */
 
    if(inpbuff[0]=='-') return;
@@ -338,45 +304,18 @@ int i ;
 
    if(inpbuff[0]=='@')
    {
-      int slider_new_pos;
-
-  //    sscanf(inpbuff+1,"%lg/%d/%d/%d",&fps,&cur_pos,&total_frames,&cur_speed);
-      memset( tokens, 0, sizeof( tokens)) ;
-      tokens[ 0] = token = inpbuff + 1 ;
-      for( i = 1 ; (i < 4) && ( token != NULL) ; i++) {
-         token = strchr( token, '/') ;
-         if( token != NULL) {
-            *token = '\0' ;
-            token++ ;
-            tokens[ i] = token ;
-         }
-      }
-      token = tokens[ 0] ;
-      if( token != NULL) {
-         fps = atof( token) ;
-      }
-      token = tokens[ 1] ;
-      if( token != NULL) {
-         cur_pos = atoi( token) ;
-      }
-      token = tokens[ 2] ;
-      if( token != NULL) {
-         total_frames = atoi( token) ;
-      }
-      token = tokens[ 3] ;
-      if( token != NULL) {
-         cur_speed = atoi( token) ;
-      }
-
+      sscanf(inpbuff+1,"%lg/%d/%d/%d",&fps,&cur_pos,&total_frames,&cur_speed);
       calc_timecode(cur_pos,cur_speed==0);
       gtk_label_set_text(GTK_LABEL(gtk_xlav->Timer),timecode);
       /* fl_set_object_label(gtk_xlav->Timer,timecode); */
       if(total_frames<1) total_frames=1;
-      slider_new_pos = 10000 * cur_pos / total_frames;
-      if (slider_pos != slider_new_pos) {
-	 slider_pos = slider_new_pos;
-	 slider_pause++;
-	 gtk_adjustment_set_value(GTK_ADJUSTMENT(gtk_xlav->timeslider), (double)slider_new_pos / 100.0);
+      if(slider_pause) {
+         slider_pause--;
+
+      } else {
+         if (!hscale_down) {
+         gtk_adjustment_set_value(GTK_ADJUSTMENT(gtk_xlav->timeslider),(100.0)*(double) ((double)cur_pos)/((double)total_frames));
+         }
       }
       if(cur_speed != old_speed) {
          char label[32];
@@ -404,7 +343,7 @@ int i ;
    }
 }
 
-static void get_input(gpointer data, gint fd, GdkInputCondition condition)
+static void get_input(gpointer data, gint fd, GdkInputCondition condition) 
 {
    char input[4096];
    int i, n;
@@ -425,18 +364,28 @@ static void get_input(gpointer data, gint fd, GdkInputCondition condition)
    }
 }
 
+
+void        timehscale_button_pressed_cb(GtkAdjustment *adjustment, gpointer data) {
+   hscale_down=1;
+}
+
+void        timehscale_button_released_cb(GtkAdjustment *adjustment, gpointer data) {
+   hscale_down=0;
+}
+
 void        timeslider_cb(GtkAdjustment *adjustment, gpointer data)
 {
-gfloat val;
-char out[256];
+   gfloat val;
+   char out[256];
 
-   if (0 < slider_pause) {
-      --slider_pause;
-   } else {
+   if (hscale_down) {
+      float new;
       val = ((GTK_ADJUSTMENT(gtk_xlav->timeslider)->value));
+      new = (val / 100.00 );
       sprintf(out,"s%d\n",(int)((val*total_frames)/100));
       write(out_pipe,out,strlen(out));
    }
+      slider_pause = 8;
 }
 
 void button_cb(GtkWidget *ob, long data)
@@ -445,7 +394,7 @@ void button_cb(GtkWidget *ob, long data)
    {
       case 1: write(out_pipe,"s0\n",3); break; /* go to beginning */
       case 2: write(out_pipe,"s10000000\n",10); break;  /* go to end */
-      /* moved this to  frame_skip_pressed
+	/* moved this to  frame_skip_pressed 
       case 3: write(out_pipe,"-\n",2); break;
       case 4: write(out_pipe,"+\n",2); break;
       */
@@ -453,50 +402,31 @@ void button_cb(GtkWidget *ob, long data)
 }
 
 static guint skip_frame(char *mychar) {
-   struct timeval current_time;
-
-   gettimeofday(&current_time,0);
-
    if (frame_skip_button_up == 0 ) {
-      if (((current_time.tv_sec-time_when_pressed.tv_sec)*1000+(current_time.tv_usec-time_when_pressed.tv_usec)/1000)>500)
-      {
-         char out[10];
-         sprintf(out,"%c\n",frame_skip_char);
-         write(out_pipe,out,2);
-         number_of_skipped_frames++;
-      }
+      char out[10];
+      sprintf(out,"%c\n",frame_skip_char);
+      write(out_pipe,out,2); 
    }
    return (! frame_skip_button_up);
 }
 
 void frame_skip_pressed(GtkWidget *ob, long data) {
-   frame_skip_button_up=0;
-
-   gettimeofday(&time_when_pressed,0);
-   number_of_skipped_frames=0;
-
-   switch(data) {
-      case 3:
-         frame_skip_char='-';  /* frame reverse */
-         gtk_timeout_add(10,(GtkFunction)skip_frame,(gpointer)0);
-         break;
-      case 4:
-         frame_skip_char='+'; /* frame advance */
-         gtk_timeout_add(10,(GtkFunction)skip_frame,(gpointer)0);
-         break;
-      default:
-         break;
-   }
+      frame_skip_button_up=0;
+      switch(data) {
+         case 3: 
+            frame_skip_char='-';  /* frame reverse */
+            gtk_timeout_add(10,(GtkFunction)skip_frame,(gpointer)0);
+            break;
+         case 4:
+            frame_skip_char='+'; /* frame advance */
+            gtk_timeout_add(10,(GtkFunction)skip_frame,(gpointer)0);
+            break;
+         default: break;
+      }
 }
 
 void frame_skip_released(GtkWidget *ob, long data){
    frame_skip_button_up=1;
-	
-   if(number_of_skipped_frames==0){
-      char out[10];
-      sprintf(out,"%c\n",frame_skip_char);
-      write(out_pipe,out,2);
-   }
 }
 
 
@@ -549,7 +479,7 @@ void do_real_exit(int ID, void *data)
    /* Kill all our children and exit */
 
    printf("real exit here\n");
-   kill(pid,9);
+   kill(0,9);
    waitpid(pid,&status,0);
    exit(0);
 }
@@ -578,6 +508,7 @@ static int check_selection(void)
 void selection_cb(GtkWidget *ob, long data)
 {
    char str[256];
+   const char *name;
 
    switch(data)
    {
@@ -621,11 +552,19 @@ void selection_cb(GtkWidget *ob, long data)
       case 7: /* Save All */
          savetype=SAVE_ALL;
          create_file_selection();
+         name = selected_filename;
+         if(name==0) return;
+         sprintf(str,"wa %s\n",name);
+         write(out_pipe,str,strlen(str));
          break;
       case 8: /* Save  */
          if(check_selection()) return;
          savetype=SAVE_SEL;
          create_file_selection();
+         name = selected_filename;
+         if(name==0) return;
+         sprintf(str,"ws %d %d %s\n",selection_start,selection_end,name);
+         write(out_pipe,str,strlen(str));
          break;
       case 11:
          if(selection_start >= 0)
@@ -705,7 +644,7 @@ static void create_child(const char **args)
    if(n!=vlen+1 || strncmp(version,LAVPLAY_VSTR,vlen)!=0)
    {
       fprintf(stderr,"%s did not send correct version info\n",PLAY_PROG);
-      fprintf(stderr,"Got: \"%s\" Expected: \"%s\"\n",version, VERSION);
+      fprintf(stderr,"Got: \"%s\" Expected: \"%s\"\n",version,LAVPLAY_VERSION);
       do_real_exit(0,0);
    }
 }
@@ -728,10 +667,8 @@ int main(int argc, char *argv[])
 
    gtk_init (&argc, &argv);
    gtk_xlav = create_form_xlav();
-// old:  gtk_signal_connect (GTK_OBJECT (gtk_xlav->xlav), "destroy",
-// old:      GTK_SIGNAL_FUNC(gtk_main_quit), NULL);
-   g_signal_connect_swapped(G_OBJECT (gtk_xlav->xlav), "destroy",
-   G_CALLBACK(gtk_main_quit), NULL);
+   gtk_signal_connect (GTK_OBJECT (gtk_xlav->xlav), "destroy",
+       GTK_SIGNAL_FUNC(gtk_main_quit), NULL);
    gtk_widget_show(gtk_xlav->xlav); /* show the main window */
 
    gdk_input_add(inp_pipe,GDK_INPUT_READ,(GdkInputFunction)get_input,(gpointer)0);

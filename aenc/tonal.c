@@ -1,70 +1,67 @@
-/*
- * Copyright (c) 1991 MPEG/audio software simulation group, All Rights Reserved
- *
- * tonal.c
- *
- * MPEG/audio coding/decoding software, work in progress
- *   NOT for public distribution until verified and approved by the
- *   MPEG/audio committee.  For further information, please contact
- *   Davis Pan, 508-493-2241, e-mail: pan@3d.enet.dec.com
- *
- * VERSION 3.9t
- *   changes made since last update:
- *   date   programmers         comment
- * 2/25/91  Douglas Wong        start of version 1.1 records
- * 3/06/91  Douglas Wong        rename: setup.h to endef.h
- *                              updated I_psycho_one and II_psycho_one
- * 3/11/91  W. J. Carter        Added Douglas Wong's updates dated
- *                              3/9/91 for I_Psycho_One() and for
- *                              II_Psycho_One().
- * 5/10/91  W. Joseph Carter    Ported to Macintosh and Unix.
- *                              Located and fixed numerous software
- *                              bugs and table data errors.
- * 6/11/91  Davis Pan           corrected several bugs
- *                              based on comments from H. Fuchs
- * 01jul91  dpwe (Aware Inc.)   Made pow() args float
- *                              Removed logical bug in I_tonal_label:
- *                              Sometimes *tone returned == STOP
- * 7/10/91  Earle Jennings      no change necessary in port to MsDos
- * 11sep91  dpwe@aware.com      Subtracted 90.3dB from II_f_f_t peaks
- * 10/1/91  Peter W. Farrett    Updated II_Psycho_One(),I_Psycho_One()
- *                              to include comments.
- *11/29/91  Masahiro Iwadare    Bug fix regarding POWERNORM
- *                              fixed several other miscellaneous bugs
- * 2/11/92  W. Joseph Carter    Ported new code to Macintosh.  Most
- *                              important fixes involved changing
- *                              16-bit ints to long or unsigned in
- *                              bit alloc routines for quant of 65535
- *                              and passing proper function args.
- *                              Removed "Other Joint Stereo" option
- *                              and made bitrate be total channel
- *                              bitrate, irrespective of the mode.
- *                              Fixed many small bugs & reorganized.
- * 2/12/92  Masahiro Iwadare    Fixed some potential bugs in
- *          Davis Pan           subsampling()
- * 2/25/92  Masahiro Iwadare    Fixed some more potential bugs
- * 6/24/92  Tan Ah Peng         Modified window for FFT
- *                              (denominator N-1 to N)
- *                              Updated all critical band rate &
- *                              absolute threshold tables and critical
- *                              boundaries for use with Layer I & II
- *                              Corrected boundary limits for tonal
- *                              component computation
- *                              Placement of non-tonal component at
- *                              geometric mean of critical band
- *                              (previous placement method commented
- *                               out - can be used if desired)
- * 3/01/93  Mike Li             Infinite looping fix in noise_label()
- * 3/19/93  Jens Spille         fixed integer overflow problem in
- *                              psychoacoutic model 1
- * 3/19/93  Giorgio Dimino      modifications to better account for
- *                              tonal and non-tonal components
- * 5/28/93 Sriram Jayasimha     "London" mod. to psychoacoustic model1
- * 8/05/93 Masahiro Iwadare     noise_label modification "option"
- * 2004/7/29 Steven Schultz     cleanup and modernize
- * 2005/10/4 Steven Schultz     continued cleanup and minor speed gain by
- *                              avoiding malloc/free inside loops.
-*/
+/**********************************************************************
+Copyright (c) 1991 MPEG/audio software simulation group, All Rights Reserved
+tonal.c
+**********************************************************************/
+/**********************************************************************
+ * MPEG/audio coding/decoding software, work in progress              *
+ *   NOT for public distribution until verified and approved by the   *
+ *   MPEG/audio committee.  For further information, please contact   *
+ *   Davis Pan, 508-493-2241, e-mail: pan@3d.enet.dec.com             *
+ *                                                                    *
+ * VERSION 3.9t                                                       *
+ *   changes made since last update:                                  *
+ *   date   programmers         comment                               *
+ * 2/25/91  Douglas Wong        start of version 1.1 records          *
+ * 3/06/91  Douglas Wong        rename: setup.h to endef.h            *
+ *                              updated I_psycho_one and II_psycho_one*
+ * 3/11/91  W. J. Carter        Added Douglas Wong's updates dated    *
+ *                              3/9/91 for I_Psycho_One() and for     *
+ *                              II_Psycho_One().                      *
+ * 5/10/91  W. Joseph Carter    Ported to Macintosh and Unix.         *
+ *                              Located and fixed numerous software   *
+ *                              bugs and table data errors.           *
+ * 6/11/91  Davis Pan           corrected several bugs                *
+ *                              based on comments from H. Fuchs       *
+ * 01jul91  dpwe (Aware Inc.)   Made pow() args float                 *
+ *                              Removed logical bug in I_tonal_label: *
+ *                              Sometimes *tone returned == STOP      *
+ * 7/10/91  Earle Jennings      no change necessary in port to MsDos  *
+ * 11sep91  dpwe@aware.com      Subtracted 90.3dB from II_f_f_t peaks *
+ * 10/1/91  Peter W. Farrett    Updated II_Psycho_One(),I_Psycho_One()*
+ *                              to include comments.                  *
+ *11/29/91  Masahiro Iwadare    Bug fix regarding POWERNORM           *
+ *                              fixed several other miscellaneous bugs*
+ * 2/11/92  W. Joseph Carter    Ported new code to Macintosh.  Most   *
+ *                              important fixes involved changing     *
+ *                              16-bit ints to long or unsigned in    *
+ *                              bit alloc routines for quant of 65535 *
+ *                              and passing proper function args.     *
+ *                              Removed "Other Joint Stereo" option   *
+ *                              and made bitrate be total channel     *
+ *                              bitrate, irrespective of the mode.    *
+ *                              Fixed many small bugs & reorganized.  *
+ * 2/12/92  Masahiro Iwadare    Fixed some potential bugs in          *
+ *          Davis Pan           subsampling()                         *
+ * 2/25/92  Masahiro Iwadare    Fixed some more potential bugs        *
+ * 6/24/92  Tan Ah Peng         Modified window for FFT               * 
+ *                              (denominator N-1 to N)                *
+ *                              Updated all critical band rate &      *
+ *                              absolute threshold tables and critical*
+ *                              boundaries for use with Layer I & II  *  
+ *                              Corrected boundary limits for tonal   *
+ *                              component computation                 *
+ *                              Placement of non-tonal component at   *
+ *                              geometric mean of critical band       *
+ *                              (previous placement method commented  *
+ *                               out - can be used if desired)        *
+ * 3/01/93  Mike Li             Infinite looping fix in noise_label() *
+ * 3/19/93  Jens Spille         fixed integer overflow problem in     *
+ *                              psychoacoutic model 1                 *
+ * 3/19/93  Giorgio Dimino      modifications to better account for   *
+ *                              tonal and non-tonal components        *
+ * 5/28/93 Sriram Jayasimha     "London" mod. to psychoacoustic model1*
+ * 8/05/93 Masahiro Iwadare     noise_label modification "option"     *
+ **********************************************************************/
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -76,59 +73,63 @@
 #define MAKE_SENSE              /* enable "MAKE_SENSE" modification */
 #define MI_OPTION               /* enable "MI_OPTION" modification */
 
-/*
+/**********************************************************************
+ *
  *        This module implements the psychoacoustic model I for the
  * MPEG encoder layer II. It uses simplified tonal and noise masking
  * threshold analysis to generate SMR for the encoder bit allocation
  * routine.
-*/
+ *
+ **********************************************************************/
 
 extern int crit_band;
-extern int *cbound;
+extern int FAR *cbound;
 extern int sub_size;
 
 void make_map(power, ltg)       /* this function calculates the */
-    mask power[HAN_SIZE];   /* global masking threshold     */
-    g_thres *ltg;
-    {
-    int i,j;
+mask FAR power[HAN_SIZE];   /* global masking threshold     */
+g_thres FAR *ltg;
+{
+ int i,j;
 
-    for (i=1;i<sub_size;i++) for(j=ltg[i-1].line;j<=ltg[i].line;j++)
-        power[j].map = i;
-    }
+ for(i=1;i<sub_size;i++) for(j=ltg[i-1].line;j<=ltg[i].line;j++)
+    power[j].map = i;
+}
 
 double add_db(a,b)
-    double a,b;
-    {
-    a = pow(10.0,a/10.0);
-    b = pow(10.0,b/10.0);
-    return 10 * log10(a+b);
-    }
+double a,b;
+{
+ a = pow(10.0,a/10.0);
+ b = pow(10.0,b/10.0);
+ return 10 * log10(a+b);
+}
 
-/*
+/****************************************************************
+ *
  *        Fast Fourier transform of the input samples.
-*/
+ *
+ ****************************************************************/
 
 void II_f_f_t(sample, power)      /* this function calculates an */
-double sample[FFT_SIZE];  /* FFT analysis for the freq.  */
-mask power[HAN_SIZE];     /* domain                      */
+double FAR sample[FFT_SIZE];  /* FFT analysis for the freq.  */
+mask FAR power[HAN_SIZE];     /* domain                      */
 {
  int i,j,k,L,l=0;
  int ip, le, le1;
  double t_r, t_i, u_r, u_i;
  static int M, MM1, init = 0, N;
- static double *x_r, *x_i, *energy;
+ double *x_r, *x_i, *energy;
  static int *rev;
  static double *w_r, *w_i;
 
+ x_r = (double *) mem_alloc(sizeof(DFFT), "x_r");
+ x_i = (double *) mem_alloc(sizeof(DFFT), "x_i");
+ energy = (double *) mem_alloc(sizeof(DFFT), "energy");
+ for(i=0;i<FFT_SIZE;i++) x_r[i] = x_i[i] = energy[i] = 0;
  if(!init){
     rev = (int *) mem_alloc(sizeof(IFFT), "rev");
     w_r = (double *) mem_alloc(sizeof(D10), "w_r");
     w_i = (double *) mem_alloc(sizeof(D10), "w_i");
-    x_r = (double *) mem_alloc(sizeof(DFFT), "x_r");
-    x_i = (double *) mem_alloc(sizeof(DFFT), "x_i");
-    energy = (double *) mem_alloc(sizeof(DFFT), "energy");
-
     M = 10;
     MM1 = 9;
     N = FFT_SIZE;
@@ -189,22 +190,27 @@ mask power[HAN_SIZE];     /* domain                      */
     power[i].next = STOP;
     power[i].type = FALSE;
  }
+ mem_free((void **) &x_r);
+ mem_free((void **) &x_i);
+ mem_free((void **) &energy);
 }
 
-/*
+/****************************************************************
+ *
  *         Window the incoming audio signal.
-*/
+ *
+ ****************************************************************/
 
 void II_hann_win(sample)          /* this function calculates a  */
-double sample[FFT_SIZE];  /* Hann window for PCM (input) */
+double FAR sample[FFT_SIZE];  /* Hann window for PCM (input) */
 {                                 /* samples for a 1024-pt. FFT  */
  register int i;
  register double sqrt_8_over_3;
  static int init = 0;
- static double *window;
+ static double FAR *window;
 
  if(!init){  /* calculate window function for the Fourier transform */
-    window = (double *) mem_alloc(sizeof(DFFT), "window");
+    window = (double FAR *) mem_alloc(sizeof(DFFT), "window");
     sqrt_8_over_3 = pow(8.0/3.0, 0.5);
     for(i=0;i<FFT_SIZE;i++){
        /* Hann window formula */
@@ -215,15 +221,17 @@ double sample[FFT_SIZE];  /* Hann window for PCM (input) */
  for(i=0;i<FFT_SIZE;i++) sample[i] *= window[i];
 }
 
-/*
+/*******************************************************************
+ *
  *        This function finds the maximum spectral component in each
  * subband and return them to the encoder for time-domain threshold
  * determination.
-*/
+ *
+ *******************************************************************/
 #ifndef LONDON
 void II_pick_max(power, spike)
-double spike[SBLIMIT];
-mask power[HAN_SIZE];
+double FAR spike[SBLIMIT];
+mask FAR power[HAN_SIZE];
 {
  double max;
  int i,j;
@@ -235,8 +243,8 @@ mask power[HAN_SIZE];
                                                    /* 4-16               */
 #else
 void II_pick_max(power, spike)
-double spike[SBLIMIT];
-mask power[HAN_SIZE];
+double FAR spike[SBLIMIT];
+mask FAR power[HAN_SIZE];
 {
  double sum;
  int i,j;
@@ -249,12 +257,15 @@ mask power[HAN_SIZE];
                                                    /* 4-16               */
 #endif
 
-/*
- *        This function labels the tonal component in the power spectrum.
-*/
+/****************************************************************
+ *
+ *        This function labels the tonal component in the power
+ * spectrum.
+ *
+ ****************************************************************/
 
 void II_tonal_label(power, tone)  /* this function extracts (tonal) */
-mask power[HAN_SIZE];     /* sinusoidals from the spectrum  */
+mask FAR power[HAN_SIZE];     /* sinusoidals from the spectrum  */
 int *tone;
 {
  int i,j, last = LAST, first, run, last_but_one = LAST; /* dpwe */
@@ -320,15 +331,17 @@ int *tone;
  }
 }
 
-/*
+/****************************************************************
+ *
  *        This function groups all the remaining non-tonal
  * spectral lines into critical band where they are replaced by
  * one single line.
-*/
+ *
+ ****************************************************************/
         
 void noise_label(power, noise, ltg)
-g_thres *ltg;
-mask *power;
+g_thres FAR *ltg;
+mask FAR *power;
 int *noise;
 {
  int i,j, centre, last = LAST;
@@ -393,14 +406,16 @@ int *noise;
  }        
 }
 
-/*
+/****************************************************************
+ *
  *        This function reduces the number of noise and tonal
  * component for further threshold analysis.
-*/
+ *
+ ****************************************************************/
 
 void subsampling(power, ltg, tone, noise)
-mask power[HAN_SIZE];
-g_thres *ltg;
+mask FAR power[HAN_SIZE];
+g_thres FAR *ltg;
 int *tone, *noise;
 {
  int i, old;
@@ -453,14 +468,16 @@ int *tone, *noise;
  }
 }
 
-/*
+/****************************************************************
+ *
  *        This function calculates the individual threshold and
  * sum with the quiet threshold to find the global threshold.
-*/
+ *
+ ****************************************************************/
 
 void threshold(power, ltg, tone, noise, bit_rate)
-mask power[HAN_SIZE];
-g_thres *ltg;
+mask FAR power[HAN_SIZE];
+g_thres FAR *ltg;
 int *tone, *noise, bit_rate;
 {
  int k, t;
@@ -507,14 +524,16 @@ int *tone, *noise, bit_rate;
  }
 }
 
-/*
+/****************************************************************
+ *
  *        This function finds the minimum masking threshold and
  * return the value to the encoder.
-*/
+ *
+ ****************************************************************/
 
 void II_minimum_mask(ltg,ltmin,sblimit)
-g_thres *ltg;
-double ltmin[SBLIMIT];
+g_thres FAR *ltg;
+double FAR ltmin[SBLIMIT];
 int sblimit;
 {
  double min;
@@ -534,13 +553,15 @@ int sblimit;
  }
 }
 
-/*
+/*****************************************************************
+ *
  *        This procedure is called in musicin to pick out the
  * smaller of the scalefactor or threshold.
-*/
+ *
+ *****************************************************************/
 
 void II_smr(ltmin, spike, scale, sblimit)
-double spike[SBLIMIT], scale[SBLIMIT], ltmin[SBLIMIT];
+double FAR spike[SBLIMIT], scale[SBLIMIT], ltmin[SBLIMIT];
 int sblimit;
 {
  int i;
@@ -554,14 +575,16 @@ int sblimit;
  }
 }
         
-/*
+/****************************************************************
+ *
  *        This procedure calls all the necessary functions to
  * complete the psychoacoustic analysis.
-*/
+ *
+ ****************************************************************/
 
 void II_Psycho_One(buffer, scale, ltmin, fr_ps)
-short buffer[2][1152];
-double scale[2][SBLIMIT], ltmin[2][SBLIMIT];
+short FAR buffer[2][1152];
+double FAR scale[2][SBLIMIT], ltmin[2][SBLIMIT];
 frame_params *fr_ps;
 {
  layer *info = fr_ps->header;
@@ -570,24 +593,24 @@ frame_params *fr_ps;
  int k,i, tone=0, noise=0;
  static char init = 0;
  static int off[2] = {256,256};
- static double *sample;
- static DSBL *spike;
+ double *sample;
+ DSBL *spike;
  static D1408 *fft_buf;
- static mask_ptr power;
- static g_ptr ltg;
+ static mask_ptr FAR power;
+ static g_ptr FAR ltg;
 
+ sample = (double *) mem_alloc(sizeof(DFFT), "sample");
+ spike = (DSBL *) mem_alloc(sizeof(D2SBL), "spike");
      /* call functions for critical boundaries, freq. */
  if(!init){  /* bands, bark values, and mapping */
     fft_buf = (D1408 *) mem_alloc((long) sizeof(D1408) * 2, "fft_buf");
-    power = (mask_ptr ) mem_alloc(sizeof(mask) * HAN_SIZE, "power");
-    sample = (double *) mem_alloc(sizeof(DFFT), "sample");
-    spike = (DSBL *) mem_alloc(sizeof(D2SBL), "spike");
+    power = (mask_ptr FAR ) mem_alloc(sizeof(mask) * HAN_SIZE, "power");
     read_cbound(info->lay,info->sampling_frequency);
     read_freq_band(&ltg,info->lay,info->sampling_frequency);
     make_map(power,ltg);
+    for (i=0;i<1408;i++) fft_buf[0][i] = fft_buf[1][i] = 0;
     init = 1;
  }
-
  for(k=0;k<stereo;k++){  /* check pcm input for 3 blocks of 384 samples */
     for(i=0;i<1152;i++) fft_buf[k][(i+off[k])%1408]= (double)buffer[k][i]/SCALE;
     for(i=0;i<FFT_SIZE;i++) sample[i] = fft_buf[k][(i+1216+off[k])%1408];
@@ -606,39 +629,45 @@ frame_params *fr_ps;
     II_minimum_mask(ltg, &ltmin[k][0], sblimit);
     II_smr(&ltmin[k][0], &spike[k][0], &scale[k][0], sblimit);        
  }
+ mem_free((void **) &sample);
+ mem_free((void **) &spike);
 }
 
-/*
+/**********************************************************************
+ *
  *        This module implements the psychoacoustic model I for the
  * MPEG encoder layer I. It uses simplified tonal and noise masking
  * threshold analysis to generate SMR for the encoder bit allocation
  * routine.
-*/
+ *
+ **********************************************************************/
 
-/*
+/****************************************************************
+ *
  *        Fast Fourier transform of the input samples.
-*/
+ *
+ ****************************************************************/
 
 void I_f_f_t(sample, power)         /* this function calculates */
-double sample[FFT_SIZE/2];  /* an FFT analysis for the  */
-mask power[HAN_SIZE/2];     /* freq. domain             */
+double FAR sample[FFT_SIZE/2];  /* an FFT analysis for the  */
+mask FAR power[HAN_SIZE/2];     /* freq. domain             */
 {
  int i,j,k,L,l=0;
  int ip, le, le1;
  double t_r, t_i, u_r, u_i;
  static int M, MM1, init = 0, N;
- static double *x_r, *x_i, *energy;
+ double *x_r, *x_i, *energy;
  static int *rev;
  static double *w_r, *w_i;
 
+ x_r = (double *) mem_alloc(sizeof(DFFT2), "x_r");
+ x_i = (double *) mem_alloc(sizeof(DFFT2), "x_i");
+ energy = (double *) mem_alloc(sizeof(DFFT2), "energy");
+ for(i=0;i<FFT_SIZE/2;i++) x_r[i] = x_i[i] = energy[i] = 0;
  if(!init){
     rev = (int *) mem_alloc(sizeof(IFFT2), "rev");
     w_r = (double *) mem_alloc(sizeof(D9), "w_r");
     w_i = (double *) mem_alloc(sizeof(D9), "w_i");
-    x_r = (double *) mem_alloc(sizeof(DFFT2), "x_r");
-    x_i = (double *) mem_alloc(sizeof(DFFT2), "x_i");
-    energy = (double *) mem_alloc(sizeof(DFFT2), "energy");
-
     M = 9;
     MM1 = 8;
     N = FFT_SIZE/2;
@@ -699,43 +728,48 @@ mask power[HAN_SIZE/2];     /* freq. domain             */
        power[i].next = STOP;
        power[i].type = FALSE;
  }
+ mem_free((void **) &x_r);
+ mem_free((void **) &x_i);
+ mem_free((void **) &energy);
 }
 
-/*
+/****************************************************************
+ *
  *         Window the incoming audio signal.
-*/
+ *
+ ****************************************************************/
 
 void I_hann_win(sample)             /* this function calculates a  */
-double sample[FFT_SIZE/2];  /* Hann window for PCM (input) */
- {                                   /* samples for a 512-pt. FFT   */
+double FAR sample[FFT_SIZE/2];  /* Hann window for PCM (input) */
+{                                   /* samples for a 512-pt. FFT   */
  register int i;
  register double sqrt_8_over_3;
  static int init = 0;
- static double *window;
+ static double FAR *window;
 
- if (!init)
-    { /* calculate window function for the Fourier transform */
-    window = (double *) mem_alloc(sizeof(DFFT2), "window");
+ if(!init){  /* calculate window function for the Fourier transform */
+    window = (double FAR *) mem_alloc(sizeof(DFFT2), "window");
     sqrt_8_over_3 = pow(8.0/3.0, 0.5);
-    for (i=0;i<FFT_SIZE/2;i++)
-        {
-        /* Hann window formula */
-        window[i]=sqrt_8_over_3*0.5*(1-cos(2.0*PI*i/(FFT_SIZE/2)))/(FFT_SIZE/2);
-        }
-    init = 1;
+    for(i=0;i<FFT_SIZE/2;i++){
+      /* Hann window formula */
+      window[i]=sqrt_8_over_3*0.5*(1-cos(2.0*PI*i/(FFT_SIZE/2)))/(FFT_SIZE/2);
     }
- for(i=0;i<FFT_SIZE/2;i++) sample[i] *= window[i];
+    init = 1;
  }
+ for(i=0;i<FFT_SIZE/2;i++) sample[i] *= window[i];
+}
 
-/*
+/*******************************************************************
+ *
  *        This function finds the maximum spectral component in each
  * subband and return them to the encoder for time-domain threshold
  * determination.
-*/
+ *
+ *******************************************************************/
 #ifndef LONDON
 void I_pick_max(power, spike)
-double spike[SBLIMIT];
-mask power[HAN_SIZE/2];
+double FAR spike[SBLIMIT];
+mask FAR power[HAN_SIZE/2];
 {
  double max;
  int i,j;
@@ -746,8 +780,8 @@ mask power[HAN_SIZE/2];
 }
 #else
 void I_pick_max(power, spike)
-double spike[SBLIMIT];
-mask power[HAN_SIZE];
+double FAR spike[SBLIMIT];
+mask FAR power[HAN_SIZE];
 {
  double sum;
  int i,j;
@@ -759,12 +793,15 @@ mask power[HAN_SIZE];
 }                                                  /* subband from bound */
 #endif
 
-/*
- *  This function labels the tonal component in the power spectrum.
-*/
+/****************************************************************
+ *
+ *        This function labels the tonal component in the power
+ * spectrum.
+ *
+ ****************************************************************/
 
 void I_tonal_label(power, tone)     /* this function extracts   */
-mask power[HAN_SIZE/2];     /* (tonal) sinusoidals from */
+mask FAR power[HAN_SIZE/2];     /* (tonal) sinusoidals from */
 int *tone;                          /* the spectrum             */
 {
  int i,j, last = LAST, first, run;
@@ -830,14 +867,16 @@ int *tone;                          /* the spectrum             */
  }
 }                        
                                 
-/*
+/****************************************************************
+ *
  *        This function finds the minimum masking threshold and
  * return the value to the encoder.
-*/
+ *
+ ****************************************************************/
 
 void I_minimum_mask(ltg,ltmin)
-g_thres *ltg;
-double ltmin[SBLIMIT];
+g_thres FAR *ltg;
+double FAR ltmin[SBLIMIT];
 {
  double min;
  int i,j;
@@ -856,14 +895,15 @@ double ltmin[SBLIMIT];
     }
 }
 
-/*
+/*****************************************************************
+ *
  *        This procedure is called in musicin to pick out the
  * smaller of the scalefactor or threshold.
  *
-*/
+ *****************************************************************/
 
 void I_smr(ltmin, spike, scale)
-double spike[SBLIMIT], scale[SBLIMIT], ltmin[SBLIMIT];
+double FAR spike[SBLIMIT], scale[SBLIMIT], ltmin[SBLIMIT];
 {
  int i;
  double max;
@@ -876,14 +916,16 @@ double spike[SBLIMIT], scale[SBLIMIT], ltmin[SBLIMIT];
  }
 }
         
-/*
+/****************************************************************
+ *
  *        This procedure calls all the necessary functions to
  * complete the psychoacoustic analysis.
-*/
+ *
+ ****************************************************************/
 
 void I_Psycho_One(buffer, scale, ltmin, fr_ps)
-short buffer[2][1152];
-double scale[2][SBLIMIT], ltmin[2][SBLIMIT];
+short FAR buffer[2][1152];
+double FAR scale[2][SBLIMIT], ltmin[2][SBLIMIT];
 frame_params *fr_ps;
 {
  int stereo = fr_ps->stereo;
@@ -891,21 +933,22 @@ frame_params *fr_ps;
  int k,i, tone=0, noise=0;
  static char init = 0;
  static int off[2] = {256,256};
- static double *sample;
- static DSBL *spike;
+ double *sample;
+ DSBL *spike;
  static D640 *fft_buf;
- static mask_ptr power;
- static g_ptr ltg;
+ static mask_ptr FAR power;
+ static g_ptr FAR ltg;
 
+ sample = (double *) mem_alloc(sizeof(DFFT2), "sample");
+ spike = (DSBL *) mem_alloc(sizeof(D2SBL), "spike");
             /* call functions for critical boundaries, freq. */
  if(!init){ /* bands, bark values, and mapping              */
     fft_buf = (D640 *) mem_alloc(sizeof(D640) * 2, "fft_buf");
-    power = (mask_ptr ) mem_alloc(sizeof(mask) * HAN_SIZE/2, "power");
-    sample = (double *) mem_alloc(sizeof(DFFT2), "sample");
-    spike = (DSBL *) mem_alloc(sizeof(D2SBL), "spike");
+    power = (mask_ptr FAR ) mem_alloc(sizeof(mask) * HAN_SIZE/2, "power");
     read_cbound(info->lay,info->sampling_frequency);
     read_freq_band(&ltg,info->lay,info->sampling_frequency);
     make_map(power,ltg);
+    for(i=0;i<640;i++) fft_buf[0][i] = fft_buf[1][i] = 0;
     init = 1;
  }
  for(k=0;k<stereo;k++){    /* check PCM input for a block of */
@@ -928,4 +971,6 @@ frame_params *fr_ps;
     I_minimum_mask(ltg, &ltmin[k][0]);
     I_smr(&ltmin[k][0], &spike[k][0], &scale[k][0]);        
  }
+ mem_free((void **) &sample);
+ mem_free((void **) &spike);
 }

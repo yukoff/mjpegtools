@@ -45,19 +45,20 @@ static void blend (unsigned char *src0[3], unsigned char *src1[3], unsigned char
    register unsigned int len = width * height;
 
    for (i=0; i<len; i+=4) {
-      dst[0][i]   = ((235 - matte[0][i]   )   * src0[0][i]   + (matte[0][i] - 16 )  * src1[0][i])   / 219;
-      dst[0][i+1] = ((235 - matte[0][i+1] ) * src0[0][i+1] + (matte[0][i+1] - 16 )  * src1[0][i+1]) / 219;
-      dst[0][i+2] = ((235 - matte[0][i+2] ) * src0[0][i+2] + (matte[0][i+2] - 16 )  * src1[0][i+2]) / 219;
-      dst[0][i+3] = ((235 - matte[0][i+3] ) * src0[0][i+3] + (matte[0][i+3] - 16 )  * src1[0][i+3]) / 219;            
+      dst[0][i]   = ((255 - matte[0][i])   * src0[0][i]   + matte[0][i]   * src1[0][i])   / 255;
+      dst[0][i+1] = ((255 - matte[0][i+1]) * src0[0][i+1] + matte[0][i+1] * src1[0][i+1]) / 255;
+      dst[0][i+2] = ((255 - matte[0][i+2]) * src0[0][i+2] + matte[0][i+2] * src1[0][i+2]) / 255;
+      dst[0][i+3] = ((255 - matte[0][i+3]) * src0[0][i+3] + matte[0][i+3] * src1[0][i+3]) / 255;            
    }
 
    len>>=2; /* len = len / 4 */
+
    /* do we really have to "downscale" matte here? */
    for (i=0,j=0; i<len; i++, j+=2) {
       int m = (matte[0][j] + matte[0][j+1] + matte[0][j+width] + matte[0][j+width+1]) >> 2;
       if ((j % width) == (width - 2)) j += width;
-      dst[1][i] = ((235-m) * src0[1][i] + (m-16) * src1[1][i]) / 219;
-      dst[2][i] = ((235-m) * src0[2][i] + (m-16) * src1[2][i]) / 219;
+      dst[1][i] = ((255-m) * src0[1][i] + m * src1[1][i]) / 255;
+      dst[2][i] = ((255-m) * src0[2][i] + m * src1[2][i]) / 255;
    }
 }
 
@@ -118,12 +119,6 @@ int main (int argc, char *argv[])
       i = y4m_read_frame(in_fd, &streaminfo, &frameinfo, yuv2);
       if (i != Y4M_OK)
          exit (1);
-      /* constrain matte luma */
-      for (i = 0; i < w*h; i++) {
-	  if (yuv2[0][i] < 16) yuv2[0][i] = 16;
-	  else
-	      if (yuv2[0][i] > 235) yuv2[0][i] = 235;
-      }
 
       blend (yuv0, yuv1, yuv2, w, h, yuv);
 

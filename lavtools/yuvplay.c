@@ -31,7 +31,7 @@
 #include "mjpeg_logging.h"
 #include <mpegconsts.h>
 #include <mpegtimecode.h>
-#include <SDL.h>
+#include <SDL/SDL.h>
 #include <sys/time.h>
 
 
@@ -43,9 +43,8 @@ SDL_Rect rect;
 static int got_sigint = 0;
 
 static void usage (void) {
-  fprintf(stderr, "Usage: lavpipe/lav2yuv... | yuvplay [options]\n"
+  fprintf(stdout, "Usage: lavpipe/lav2yuv... | yuvplay [options]\n"
 	  "  -s : display size, width x height\n"
-	  "  -t : set window title\n"
 	  "  -f : frame rate (overrides rate in stream header)\n"
           "  -c : don't sync on frames - plays at stream speed\n"
 	  "  -v : verbosity {0, 1, 2} [default: 1]\n"
@@ -89,9 +88,8 @@ int main(int argc, char *argv[])
    int frame_width;
    int frame_height;
    int wait_for_sync = 1;
-   char *window_title = NULL;
 
-   while ((n = getopt(argc, argv, "hs:t:f:cv:")) != EOF) {
+   while ((n = getopt(argc, argv, "hs:f:cv:")) != EOF) {
       switch (n) {
          case 'c':
             wait_for_sync = 0;
@@ -102,9 +100,7 @@ int main(int argc, char *argv[])
                exit(1);
             }
             break;
-	  case 't':
-	    window_title = optarg;
-	    break;
+
 	  case 'f':
 		  frame_rate = atof(optarg);
 		  if( frame_rate <= 0.0 || frame_rate > 200.0 )
@@ -129,7 +125,6 @@ int main(int argc, char *argv[])
 
    mjpeg_default_handler_verbosity(verbosity);
 
-   y4m_accept_extensions(1);
    y4m_init_stream_info(&streaminfo);
    y4m_init_frame_info(&frameinfo);
    if ((n = y4m_read_stream_header(in_fd, &streaminfo)) != Y4M_OK) {
@@ -137,16 +132,6 @@ int main(int argc, char *argv[])
          y4m_strerr(n));
       exit (1);
    }
-
-   switch (y4m_si_get_chroma(&streaminfo)) {
-   case Y4M_CHROMA_420JPEG:
-   case Y4M_CHROMA_420MPEG2:
-   case Y4M_CHROMA_420PALDV:
-     break;
-   default:
-     mjpeg_error_exit1("Cannot handle non-4:2:0 streams yet!");
-   }
-
    frame_width = y4m_si_get_width(&streaminfo);
    frame_height = y4m_si_get_height(&streaminfo);
 
@@ -181,9 +166,6 @@ int main(int argc, char *argv[])
       mjpeg_error("Couldn't initialize SDL: %s", SDL_GetError());
       exit(1);
    }
-
-   /* set window title */
-   SDL_WM_SetCaption(window_title, NULL);
 
    /* yuv params */
    yuv[0] = malloc(frame_width * frame_height * sizeof(unsigned char));
