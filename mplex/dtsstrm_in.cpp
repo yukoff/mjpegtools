@@ -51,7 +51,6 @@ static const unsigned int dts_packet_samples[4] =
 DTSStream::DTSStream(IBitStream &ibs, Multiplexor &into) : 
 	AudioStream( ibs, into )
 {
-	num_frames = 0;
 }
 
 bool DTSStream::Probe(IBitStream &bs )
@@ -59,9 +58,7 @@ bool DTSStream::Probe(IBitStream &bs )
     return bs.GetBits(32) == DTS_SYNCWORD;
 }
 
-#ifdef DEBUG_DTS
-
-static char *binString(int value, int length)
+char *binString(int value, int length)
 {
     char *bin = (char *) malloc((length + 1) * sizeof(char));
     int index;
@@ -80,6 +77,7 @@ static char *binString(int value, int length)
 
     return(bin);
 }
+
 
 
 /*************************************************************************
@@ -120,7 +118,7 @@ void  DTSStream::DisplayDtsHeaderInfo()
     printf( "surround sums difference flags = %i\n", bs.GetBits(1) ); 
     printf( "dialog normalization parameter = %i\n", bs.GetBits(4) ); 
 }
-#endif
+
 void DTSStream::Init ( const int _stream_num)
 
 {
@@ -128,7 +126,7 @@ void DTSStream::Init ( const int _stream_num)
 	MuxStream::Init( PRIVATE_STR_1, 
 					 1,  // Buffer scale
 					 default_buffer_size,
-					 false,
+					 muxinto.vcd_zero_stuffing,
 					 muxinto.buffers_in_audio,
 					 muxinto.always_buffers_in_audio
 		);
@@ -137,6 +135,7 @@ void DTSStream::Init ( const int _stream_num)
                 bs.StreamName()
                 );
 
+	InitAUbuffer();
 	AU_start = bs.bitcount();
     if (bs.GetBits(32)==DTS_SYNCWORD)
     {
@@ -153,10 +152,12 @@ void DTSStream::Init ( const int _stream_num)
 
         header_skip = 10;        // Initially skipped past 10 bytes of header 
 
-		num_frames++;
+		size_frames[0] = framesize;
+		size_frames[1] = framesize;
+		num_frames[0]++;
         access_unit.start = AU_start;
 		access_unit.length = framesize;
-        mjpeg_info( "dts frame size = %d", framesize );
+        mjpeg_info( "dts frame size = %d\n", framesize );
 		samples_per_second = dts_frequency[frequency];
 
 		/* Presentation time-stamping  */
@@ -166,7 +167,7 @@ void DTSStream::Init ( const int _stream_num)
 		access_unit.DTS = access_unit.PTS;
 		access_unit.dorder = decoding_order;
 		++decoding_order;
-		aunits.Append( access_unit );
+		aunits.append( access_unit );
 
     } else
     {
@@ -192,10 +193,10 @@ void DTSStream::FillAUbuffer(unsigned int frames_to_buffer )
 	mjpeg_debug( "Scanning %d dts audio frames to frame %d", 
 				 frames_to_buffer, last_buffered_AU );
 
-	while( !bs.eos() && decoding_order < last_buffered_AU 
-            && !muxinto.AfterMaxPTS(access_unit.PTS) )
+    int skip;
+	while( !bs.eos() && decoding_order < last_buffered_AU )
 	{
-		int skip = access_unit.length - header_skip; 
+		skip = access_unit.length - header_skip; 
         bs.SeekFwdBits(skip);
 		prev_offset = AU_start;
 		AU_start = bs.bitcount();
@@ -204,10 +205,13 @@ void DTSStream::FillAUbuffer(unsigned int frames_to_buffer )
         {
             mjpeg_warn( "Discarding incomplete final frame dts stream %d!",
                        stream_num);
-            aunits.DropLast();
+            aunits.droplast();
             decoding_order--;
             break;
         }
+
+        if( muxinto.AfterMaxPTS(access_unit.PTS) )
+            break;
 
 		/* Check if we have reached the end or have  another catenated 
 		   stream to process before finishing ... */
@@ -238,8 +242,8 @@ void DTSStream::FillAUbuffer(unsigned int frames_to_buffer )
 		access_unit.DTS = access_unit.PTS;
 		access_unit.dorder = decoding_order;
 		decoding_order++;
-		aunits.Append( access_unit );
-		num_frames++;
+		aunits.append( access_unit );
+		num_frames[0]++;
 
 		num_syncword++;
 
@@ -261,7 +265,9 @@ void DTSStream::Close()
     stream_length = AU_start >> 3;
 	mjpeg_info ("DTS STATISTICS: %02x", stream_id); 
     mjpeg_info ("Audio stream length %lld bytes.", stream_length);
-    mjpeg_info   ("Frames         : %8u",  num_frames);
+    mjpeg_info   ("Syncwords      : %8u",num_syncword);
+    mjpeg_info   ("Frames         : %8u padded",  num_frames[0]);
+    mjpeg_info   ("Frames         : %8u unpadded", num_frames[1]);
 }
 
 /*************************************************************************
@@ -296,9 +302,6 @@ unsigned int
 DTSStream::ReadPacketPayload(uint8_t *dst, unsigned int to_read)
 {
 	clockticks   decode_time;
-    // TODO: BUG BUG BUG: if there is a change in format in the stream
-    // this framesize will be invalid!  It only *looks* like it works...
-    // really each AU should store its own framesize...
     unsigned int frames = to_read / framesize;
     bitcount_t read_start = bs.GetBytePos();
     unsigned int bytes_read =  bs.GetBytes( dst + 4, framesize * frames);
