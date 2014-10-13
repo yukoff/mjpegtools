@@ -153,17 +153,29 @@ int main(int argc, char *argv[])
 	width = quicktime_video_width(file, vtrack);
 	height = quicktime_video_height(file, vtrack);
 
+/*
+ * HACK alert. 
+ *
+ * libquicktime's behaviour has changed, at least for 2vuy and similar files.
+ * The color model in the codec used to be initialized by this point but now
+ * is not.  This was causing all but ffmpeg based codecs to fail the is_yuv
+ * test below.   The workaround is to call lqt_get_decoder_colormodel(), this
+ * completes the codec initialization but nothing else.
+ *
+ * DON'T check the status - the first call "fails" but has called the codec
+ * decode initialiation.  A 2nd call to lqt_get_decoder_colormodel will "succeed"
+*/
+	lqt_get_decoder_colormodel(file, vtrack);
+
 	cmodel = lqt_get_cmodel(file, vtrack);
 	omodel = 0;
 
 	if	(lqt_colormodel_is_yuv(cmodel) == 0)
 		mjpeg_error_exit1("Color space '%s' not Y'CbCr",
 				lqt_colormodel_to_string(cmodel));
-
 	if	(lqt_colormodel_has_alpha(cmodel) == 1)
 		mjpeg_error_exit1("Color space '%s' has alpha channel",
-				lqt_colormodel_to_string(cmodel));
-
+				lqt_colormodel_to_string(cmodel)); 
 	y4m_accept_extensions(1);
 
 	y4m_init_stream_info(&ostream);
