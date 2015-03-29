@@ -1,0 +1,19 @@
+# CVSROOT
+# If not specified will be taken from CVS/Root by git-cvsimport
+#CVSROOT=:pserver:anonymous@mjpeg.cvs.sourceforge.net:/cvsroot/mjpeg
+
+# REPO
+# If not specified will be taken from CVS/Repository by git-cvsimport
+#REPO=mjpeg_play
+
+# REMOTE
+# If set, import to remotes/<remote>/<branch> akin git-clone does
+REMOTE=origin
+
+# BRANCH
+# Branch name for cvs' HEAD. Default: master
+BRANCH=master
+
+# OPTS
+# Additional options to be passed for git-cvsimport. Recommended: -k
+OPTS="-k -v"

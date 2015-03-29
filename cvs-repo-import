@@ -1,0 +1,18 @@
+#!/bin/bash
+
+WDIR=$(cd $(dirname $0) && pwd)
+CONFIGDIR=${WDIR}/etc
+CONFIGFILE=${CONFIGDIR}/config
+
+if [ -f $CONFIGFILE ]; then
+    . $CONFIGFILE
+fi
+
+: ${BRANCH:?'BRANCH not set'}
+
+OPT_CVSROOT=$(test -z "$CVSROOT" || echo "-d $CVSROOT")
+OPT_REMOTE=$(test -z "$REMOTE" || echo "-r $REMOTE")
+
+pushd $WDIR >/dev/null
+git cvsimport -i -o $BRANCH -C . $OPT_CVSROOT $OPT_REMOTE $OPTS $REPO
+popd >/dev/null
